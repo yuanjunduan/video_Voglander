@@ -1,0 +1,56 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### IntelliJ IDEA ###
+.idea/modules.xml
+.idea/jarRepositories.xml
+.idea/compiler.xml
+.idea/libraries/
+*.iws
+*.iml
+*.ipr
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Mac OS ###
+.DS_Store
+
+.idea/*
+
+voglander-web/src/test/java/io/github/lunasaw/voglander/repository/service/VdianBugSearch.java
+
+### SQLite 运行期产物(主库 + WAL + shm + 回滚日志,不入库) ###
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*-back.db
+*.db
+
+### ZLMediaKit 媒体服务二进制(本地运行产物,体积大,不入库) ###
+media/**/MediaServer
+.superpowers/*
+
+**/logs

@@ -1,0 +1,457 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>io.github.lunasaw</groupId>
+    <artifactId>voglander</artifactId>
+    <version>1.0.2-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <name>voglander</name>
+    <description>The opulent video surveillance platform.</description>
+    <url>https://github.com/lunasaw/voglander</url>
+    <modules>
+        <module>voglander-client</module>
+        <module>voglander-common</module>
+        <module>voglander-manager</module>
+        <module>voglander-service</module>
+        <module>voglander-repository</module>
+        <module>voglander-integration</module>
+        <module>voglander-test</module>
+        <module>voglander-web</module>
+        <module>voglander-coverage-report</module>
+    </modules>
+
+
+    <properties>
+        <github.username>lunasaw</github.username>
+        <finalName>${project.artifactId}</finalName>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <spring-boot.version>3.5.3</spring-boot.version>
+        <jacoco.version>0.8.11</jacoco.version>
+        <!--第三方依赖-->
+        <luna-common.version>2.6.8</luna-common.version>
+        <mybatis-plus.version>3.5.5</mybatis-plus.version>
+        <mybatis-plush-dymaic.version>4.3.1</mybatis-plush-dymaic.version>
+        <mysql-version>8.2.0</mysql-version>
+        <postgresql.version>42.7.3</postgresql.version>
+        <gb28181-proxy.version>1.8.7</gb28181-proxy.version>
+        <sip-gateway.version>1.8.7</sip-gateway.version>
+        <zlm.version>1.0.11</zlm.version>
+        <skywalking.version>9.1.0</skywalking.version>
+        <httpclient-5.version>5.3.1</httpclient-5.version>
+        <httpcore.version>5.2.4</httpcore.version>
+        <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
+        <easyexcel.version>4.0.1</easyexcel.version>
+        <rocketmq.spring.version>2.3.0</rocketmq.spring.version>
+        <spring-doc.version>2.8.9</spring-doc.version>
+        <twelvemonkeys.version>3.12.0</twelvemonkeys.version>
+        <!--本地依赖-->
+        <voglander.version>1.0.2-SNAPSHOT</voglander.version>
+        <project.version>1.0.2-SNAPSHOT</project.version>
+        <project-client.version>1.0.2-SNAPSHOT</project-client.version>
+
+    </properties>
+
+    <developers>
+        <developer>
+            <name>luna</name>
+            <id>luna</id>
+            <email>iszychen@gmail.com</email>
+        </developer>
+    </developers>
+    <licenses>
+        <license>
+            <name>Apache 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+        </license>
+    </licenses>
+    <scm>
+        <url>https://github.com/lunasaw/voglander</url>
+        <connection>https://github.com/lunasaw/voglander</connection>
+        <developerConnection>https://github.com/lunasaw/voglander.git</developerConnection>
+    </scm>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.github.lunasaw</groupId>
+                <artifactId>luna-common</artifactId>
+                <version>${luna-common.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- sip-gateway-bom 必须在 spring-boot-dependencies 之后导入：
+                 它会传递 Spring Boot 3.3.1，先导入会覆盖 3.5.3 导致 @MockitoBean(Spring6.2+) 缺失 -->
+            <dependency>
+                <groupId>io.github.lunasaw</groupId>
+                <artifactId>sip-gateway-bom</artifactId>
+                <version>${sip-gateway.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.github.lunasaw</groupId>
+                <artifactId>voglander-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.lunasaw</groupId>
+                <artifactId>voglander-client</artifactId>
+                <version>${project-client.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.lunasaw</groupId>
+                <artifactId>voglander-integration</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.lunasaw</groupId>
+                <artifactId>voglander-repository</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.lunasaw</groupId>
+                <artifactId>voglander-manager</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.lunasaw</groupId>
+                <artifactId>voglander-service</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.lunasaw</groupId>
+                <artifactId>voglander-web</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <!-- https://mvnrepository.com/artifact/com.baomidou/mybatis-plus-spring-boot3-starter -->
+            <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+                <version>${mybatis-plus.version}</version>
+            </dependency>
+
+            <!-- https://mvnrepository.com/artifact/com.baomidou/dynamic-datasource-spring-boot3-starter -->
+            <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>dynamic-datasource-spring-boot3-starter</artifactId>
+                <version>${mybatis-plush-dymaic.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.mysql</groupId>
+                <artifactId>mysql-connector-j</artifactId>
+                <version>${mysql-version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.postgresql</groupId>
+                <artifactId>postgresql</artifactId>
+                <version>${postgresql.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.springdoc</groupId>
+                <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+                <version>${spring-doc.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springdoc</groupId>
+                <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+                <version>${spring-doc.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.alibaba</groupId>
+                <artifactId>easyexcel</artifactId>
+                <version>${easyexcel.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.twelvemonkeys.imageio</groupId>
+                <artifactId>imageio-webp</artifactId>
+                <version>${twelvemonkeys.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>jakarta.servlet</groupId>
+                <artifactId>jakarta.servlet-api</artifactId>
+                <version>6.0.0</version>
+                <scope>provided</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.skywalking</groupId>
+                <artifactId>apm-toolkit-trace</artifactId>
+                <version>${skywalking.version}</version>
+            </dependency>
+
+            <!-- https://mvnrepository.com/artifact/org.apache.skywalking/apm-toolkit-logback-1.x -->
+            <dependency>
+                <groupId>org.apache.skywalking</groupId>
+                <artifactId>apm-toolkit-logback-1.x</artifactId>
+                <version>${skywalking.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.github.lunasaw</groupId>
+                <artifactId>zlm-spring-boot-starter</artifactId>
+                <version>${zlm.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>${maven-compiler-plugin.version}</version>
+                <configuration>
+                    <parameters>true</parameters>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <version>${spring-boot.version}</version>
+            </plugin>
+            <!-- 在根模块激活JaCoCo插件以确保所有子模块生成覆盖率数据 -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+
+        <!-- 插件管理：子模块继承配置 -->
+        <pluginManagement>
+            <plugins>
+                <!-- 统一 maven-deploy-plugin 版本,供 skipPublishing 模块(test/coverage-report/web)声明 skip 时复用,消除 version missing 警告 -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-deploy-plugin</artifactId>
+                    <version>3.1.2</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <version>${jacoco.version}</version>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>prepare-agent</goal>
+                            </goals>
+                        </execution>
+                        <execution>
+                            <id>report</id>
+                            <phase>test</phase>
+                            <goals>
+                                <goal>report</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                    <configuration>
+                        <excludes>
+                            <!-- 排除不需要测试覆盖的类 -->
+                            <exclude>**/*Application.class</exclude>
+                            <exclude>**/*Config.class</exclude>
+                            <exclude>**/*Configuration.class</exclude>
+                            <exclude>**/model/**</exclude>
+                            <exclude>**/dto/**</exclude>
+                            <exclude>**/vo/**</exclude>
+                            <exclude>**/req/**</exclude>
+                            <exclude>**/resp/**</exclude>
+                            <exclude>**/entity/**</exclude>
+                            <exclude>**/constant/**</exclude>
+                            <exclude>**/enums/**</exclude>
+                        </excludes>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+
+    <!-- 报告配置 -->
+    <reporting>
+        <plugins>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <reportSets>
+                    <reportSet>
+                        <reports>
+                            <report>report</report>
+                        </reports>
+                    </reportSet>
+                </reportSets>
+            </plugin>
+        </plugins>
+    </reporting>
+
+    <profiles>
+        <profile>
+            <id>github_auth</id>
+            <distributionManagement>
+                <repository>
+                    <id>github_auth</id>
+                    <name>GitHub lunasaw Apache Maven Packages</name>
+                    <url>https://maven.pkg.github.com/lunasaw/voglander</url>
+                </repository>
+                <snapshotRepository>
+                    <id>github_auth</id>
+                    <name>GitHub lunasaw Apache Maven Packages</name>
+                    <url>https://maven.pkg.github.com/lunasaw/voglander</url>
+                </snapshotRepository>
+            </distributionManagement>
+            <!--
+                注意:此处不要再配 <repositories> 指向 GitHub Packages。
+                发布目标(distributionManagement)≠ 依赖来源(repositories)。
+                若把 GitHub Packages 也列为依赖来源,deploy 时 Maven 会去远程查找尚未发布的
+                io.github.lunasaw:voglander:pom:${version},404 → "Could not find artifact ... in github_auth"。
+            -->
+            <activation>
+                <activeByDefault>false</activeByDefault>
+            </activation>
+        </profile>
+        <profile>
+            <id>ossrh</id>
+            <distributionManagement>
+                <repository>
+                    <id>ossrh</id>
+                    <url>https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/</url>
+                </repository>
+                <snapshotRepository>
+                    <id>ossrh</id>
+                    <url>https://ossrh-staging-api.central.sonatype.com/content/repositories/snapshots</url>
+                </snapshotRepository>
+            </distributionManagement>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <build>
+                <plugins>
+                    <!--
+                        Maven 中央仓库发布插件（Sonatype Central Portal 官方，2025+ 推荐）。
+                        替换老的 nexus-staging-maven-plugin：后者按模块逐个连 Sonatype 做 profile 检查,
+                        多模块下需连 N 次,任一次 TLS 握手卡死即整体 hang。
+                        central-publishing 把全部模块产物打成 1 个 bundle 一次性上传,根治多连接问题。
+                          - extensions=true:接管默认 deploy 行为
+                          - publishingServerId=ossrh:复用 settings.xml 中已有的 ossrh Portal token 凭证
+                          - autoPublish=true:校验通过后自动发布(发 SNAPSHOT 时此项不生效,直接进 snapshot 仓库)
+                          - waitUntil=published:release 构建阻塞到真正发布完成,便于 CI 判定
+                        当前 voglander 版本为 -SNAPSHOT:central-publishing 识别 -SNAPSHOT 后端会路由到
+                        snapshotRepository,跳过 bundle/publish 流程,直接走标准 deploy。
+                        不发布的模块(voglander-test / voglander-coverage-report / voglander-web)
+                        通过各自 <skipPublishing>true</skipPublishing> 排除。
+                    -->
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.10.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>ossrh</publishingServerId>
+                            <autoPublish>true</autoPublish>
+                            <waitUntil>published</waitUntil>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.1.0</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <gpgArguments>
+                                <arg>--pinentry-mode</arg>
+                                <arg>loopback</arg>
+                            </gpgArguments>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.3.0</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.6.3</version>
+                        <configuration>
+                            <source>17</source>
+                            <additionalOptions>-Xdoclint:none</additionalOptions>
+                            <!-- 关闭模块间 offline 链接自动探测,避免 target/apidocs/package-list 缺失时刷 "Error fetching link" 噪音 -->
+                            <detectLinks>false</detectLinks>
+                            <detectOfflineLinks>false</detectOfflineLinks>
+                            <charset>UTF-8</charset>
+                            <encoding>UTF-8</encoding>
+                            <docencoding>UTF-8</docencoding>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <!--
+            集成测试 Profile：用于显式运行需要外部服务（Redis、PostgreSQL）的集成测试。
+
+            使用方式：
+            - mvn test                     # 默认：集成测试在服务不可用时自动跳过
+            - mvn test -Pintegration-tests # 显式运行集成测试，服务不可用时测试失败
+
+            原理：
+            - 集成测试使用 JUnit 5 Assumptions.assumeTrue() 检测服务可用性
+            - 默认情况下，服务不可用时测试被标记为 "skipped"（不算失败）
+            - 激活此 profile 后，集成测试会正常执行，服务不可用则失败
+
+            注意：
+            - 此 profile 主要用于 CI/CD 环境，确保集成测试在服务可用时执行
+            - 本地开发时，默认的自动跳过行为更方便
+        -->
+        <profile>
+            <id>integration-tests</id>
+            <properties>
+                <!-- 标记集成测试 profile 已激活，测试代码可以读取此属性 -->
+                <integration-tests.enabled>true</integration-tests.enabled>
+            </properties>
+            <activation>
+                <activeByDefault>false</activeByDefault>
+            </activation>
+        </profile>
+    </profiles>
+</project>

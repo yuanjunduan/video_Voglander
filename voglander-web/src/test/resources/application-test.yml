@@ -1,0 +1,132 @@
+# token配置
+token:
+  # 令牌自定义标识
+  header: Authorization
+  # 令牌密钥
+  secret: abcdefghijklmnopqrstuvwxyz
+  # 令牌有效期（默认30分钟）
+  expireTime: 30
+
+spring:
+  application:
+    name: voglander-test
+
+  # 允许 Bean 定义覆盖（测试环境 Mock Bean 覆盖生产 Bean）
+  # 这是测试环境的标准做法，用于用 Mock Bean 替换真实 Redis/外部服务连接
+  # 仅影响测试环境，生产环境不受影响
+  main:
+    allow-bean-definition-overriding: true
+
+  datasource:
+    dynamic:
+      primary: master #设置默认的数据源或者数据源组,默认值即为master
+      strict: false #严格匹配数据源,默认false. true未匹配到指定数据源时抛异常,false使用默认数据源
+      datasource:
+        master:
+          #          type: com.zaxxer.hikari.HikariDataSource
+          #          driver-class-name: com.mysql.cj.jdbc.Driver
+          #          url: jdbc:mysql://127.0.0.1:3306/voglander?allowPublicKeyRetrieval=true&useUnicode=true&useSSL=false&serverTimezone =Asia/Shanghai
+          #          username: root
+          #          password: root
+          driver-class-name: org.sqlite.JDBC
+          url: jdbc:sqlite:test-app.db?busy_timeout=10000
+
+    # hikari 线程池
+    hikari:
+      max-lifetime: 1800000
+      connection-timeout: 30000
+      idle-timeout: 3600000
+      connection-test-query: /**SELECT 1*/
+      maximum-pool-size: 5
+      minimum-idle: 1
+
+  # 缓存配置
+  cache:
+    type: simple  # 测试环境使用简单缓存
+
+# SSE 事件总线配置（测试环境使用本地实现）
+sse:
+  type: local  # 使用 LocalSseEventBus（单节点），不依赖 Redis
+
+  # Redis配置（测试环境可选）
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      database: 15  # 测试专用数据库
+      timeout: 1000
+      connect-timeout: 1000
+      password: luna
+
+# MyBatis Plus配置（从 voglander-repository 引入）
+mybatis-plus:
+  check-config-location: true
+  configuration:
+    cache-enabled: true
+    use-generated-keys: true
+    default-executor-type: simple
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl  # 测试环境启用SQL日志
+
+# 日志配置
+logging:
+  level:
+    root: INFO
+    io.github.lunasaw.voglander: DEBUG
+    org.springframework.cache: DEBUG
+    org.springframework.data.redis: DEBUG
+    org.mybatis: DEBUG
+
+# 服务器配置
+server:
+  port: 0  # 测试环境使用随机端口
+
+# SIP 配置（测试环境）
+local:
+  sip:
+    enable: true
+    enable-log: false
+    server:
+      enabled: true
+      ip: 127.0.0.1
+      port: 5060
+      domain: 34020000002000000001
+      serverId: 34020000002000000001
+      serverName: GB28181-Server
+      enableUdp: true
+      enableTcp: true
+    client:
+      enabled: true
+      clientId: 34020000001320000001
+      ip: 127.0.0.1
+      port: 5061
+      realm: 34020000
+      password: 123456
+
+# 覆盖 application-inte.yml 的 placeholder（无默认值）
+sip:
+  enable: true
+  enable-log: false
+  server:
+    enabled: true
+    ip: 127.0.0.1
+    port: 5060
+    domain: 34020000002000000001
+    serverId: 34020000002000000001
+    serverName: GB28181-Server
+    enableUdp: true
+    enableTcp: true
+  client:
+    enabled: false  # 禁用客户端模式，避免 CascadeQueryHandler 被激活
+    clientId: 34020000001320000001
+    ip: 127.0.0.1
+    port: 5061
+    realm: 34020000
+    password: 123456
+    transport: UDP
+
+# 测试环境配置：禁用所有生产 QueryListener，使 MockDeviceAdapter 成为唯一 QueryListener
+voglander:
+  protocol-lab:
+    enabled: false  # 禁用 lab 模式，避免 LabQueryListener 被激活
+

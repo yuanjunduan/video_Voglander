@@ -1,0 +1,123 @@
+{
+  "groups": [
+    {
+      "name": "sip.common",
+      "type": "io.github.lunasaw.sip.common.config.SipCommonProperties",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties"
+    },
+    {
+      "name": "sip.common.signal-auth",
+      "type": "io.github.lunasaw.sip.common.config.SipCommonProperties$SignalAuth",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties"
+    },
+    {
+      "name": "sip.common.time-sync",
+      "type": "io.github.lunasaw.sip.common.config.SipCommonProperties$TimeSync",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties"
+    }
+  ],
+  "properties": [
+    {
+      "name": "sip.common.directory-version",
+      "type": "java.lang.String",
+      "description": "GBT-28181-2022 附录 J 目录类型语义版本：2016 \/ 2022。 2016 标准下 215=虚拟组织，216=中心信令控制服务器； 2022 标准下 215=业务分组，216=虚拟组织。 默认 2022，可通过 sip.common.directory-version 覆盖。",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties",
+      "defaultValue": "2022"
+    },
+    {
+      "name": "sip.common.protocol-version",
+      "type": "java.lang.String",
+      "description": "GBT-28181-2022 附录 I 协议版本标识 X-GB-Ver。 默认 3.0（GBT-28181-2022），可通过 sip.common.protocol-version 覆盖。",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties",
+      "defaultValue": "3.0"
+    },
+    {
+      "name": "sip.common.signal-auth.algorithm",
+      "type": "java.lang.String",
+      "description": "数字摘要算法：MD5（默认，RFC 3261）\/ SM3（GBT-28181-2022 §8.3 推荐）。",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties$SignalAuth",
+      "defaultValue": "MD5"
+    },
+    {
+      "name": "sip.common.signal-auth.enabled",
+      "type": "java.lang.Boolean",
+      "description": "是否启用 §8.3 信令认证扩展（注入 Note 头域）。",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties$SignalAuth",
+      "defaultValue": false
+    },
+    {
+      "name": "sip.common.signal-auth.gateway-id",
+      "type": "java.lang.String",
+      "description": "信令安全路由网关 ID（启用 Monitor-User-Identity 时必填，跨域转发链首段）。",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties$SignalAuth"
+    },
+    {
+      "name": "sip.common.signal-auth.user-attribute",
+      "type": "java.lang.String",
+      "description": "用户身份属性（隶属机构\/类别\/职级），跨域转发链尾段，可选。",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties$SignalAuth"
+    },
+    {
+      "name": "sip.common.signal-auth.user-id",
+      "type": "java.lang.String",
+      "description": "用户 ID（启用 Monitor-User-Identity 时必填，跨域转发链次段）。",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties$SignalAuth"
+    },
+    {
+      "name": "sip.common.time-sync.auto-adjust-expire",
+      "type": "java.lang.Boolean",
+      "description": "是否在时间偏差较大时自动调整注册过期时间",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties$TimeSync",
+      "defaultValue": true
+    },
+    {
+      "name": "sip.common.time-sync.enabled",
+      "type": "java.lang.Boolean",
+      "description": "是否启用时间同步",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties$TimeSync",
+      "defaultValue": true
+    },
+    {
+      "name": "sip.common.time-sync.mode",
+      "type": "io.github.lunasaw.sip.common.config.SipCommonProperties$TimeSyncMode",
+      "description": "时间同步方式: SIP, NTP, BOTH",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties$TimeSync"
+    },
+    {
+      "name": "sip.common.time-sync.ntp-server",
+      "type": "java.lang.String",
+      "description": "NTP服务器地址",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties$TimeSync",
+      "defaultValue": "pool.ntp.org"
+    },
+    {
+      "name": "sip.common.time-sync.ntp-sync-interval",
+      "type": "java.lang.Long",
+      "description": "NTP校时间隔（秒）",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties$TimeSync",
+      "defaultValue": 3600
+    },
+    {
+      "name": "sip.common.time-sync.offset-threshold",
+      "type": "java.lang.Long",
+      "description": "时间偏差阈值（毫秒） 当时间偏差超过此值时会记录警告",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties$TimeSync",
+      "defaultValue": 1000
+    },
+    {
+      "name": "sip.common.time-sync.register-expire-on-error",
+      "type": "java.lang.Integer",
+      "description": "SIP注册过期时间建议值（秒） 当时间偏差超过阈值时的注册过期时间",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties$TimeSync",
+      "defaultValue": 36000
+    },
+    {
+      "name": "sip.common.user-agent",
+      "type": "java.lang.String",
+      "description": "UserAgent 头默认值，可通过 sip.common.user-agent 覆盖",
+      "sourceType": "io.github.lunasaw.sip.common.config.SipCommonProperties",
+      "defaultValue": "sip-proxy"
+    }
+  ],
+  "hints": []
+}

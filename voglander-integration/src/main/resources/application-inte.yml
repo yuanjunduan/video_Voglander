@@ -1,0 +1,149 @@
+sip:
+  enable-log: ${local.sip.enable-log}
+  enable: ${local.sip.enable}
+  common:
+    # 时间同步配置
+    time-sync:
+      enabled: true                    # 是否启用时间同步
+      mode: BOTH                       # 时间同步方式: SIP, NTP, BOTH
+      offset-threshold: 1000           # 时间偏差阈值(毫秒)
+      ntp-server: "pool.ntp.org"       # NTP服务器地址
+      ntp-sync-interval: 3600          # NTP校时间隔(秒)
+      register-expire-on-error: 36000  # 时间偏差较大时的注册过期时间(秒)
+      auto-adjust-expire: true         # 是否自动调整注册过期时间
+
+  server:
+    enabled: ${local.sip.server.enabled:false}
+    ip: ${local.sip.server.ip:127.0.0.1}
+    listen-ip: ${local.sip.server.listen-ip:0.0.0.0}
+    port: ${local.sip.server.port:5060}
+    # 对外可达IP/端口（NAT/端口映射/多节点场景），不配置时 fallback 到 ip/port
+    external-ip: ${local.sip.server.external-ip:}
+    external-port: ${local.sip.server.external-port:0}
+    maxDevices: ${local.sip.server.maxDevices:100}
+    deviceTimeout: ${local.sip.server.deviceTimeout:5m}
+    enableTcp: ${local.sip.server.enableTcp:false}
+    enableUdp: ${local.sip.server.enableUdp:true}
+    domain: ${local.sip.server.domain:34020000002000000001}
+    serverId: ${local.sip.server.serverId:34020000002000000001}
+    serverName: ${local.sip.server.serverName:GB28181-Server}
+
+  client:
+    enabled: ${local.sip.client.enabled:false}
+    clientId: ${local.sip.client.clientId:34020000001320000001}
+    clientName: ${local.sip.client.clientName:GB28181-Client}
+    username: ${local.sip.client.username:admin}
+    password: ${local.sip.client.password:123456}
+    keepAliveInterval: ${local.sip.client.keepAliveInterval:1m}
+    maxRetries: ${local.sip.client.maxRetries:3}
+    retryDelay: ${local.sip.client.retryDelay:5s}
+    registerExpires: ${local.sip.client.registerExpires:3600}
+    port: ${local.sip.client.port:5061}
+    realm: ${local.sip.client.realm:34020000}
+    domain: ${local.sip.client.domain:${local.sip.client.ip:127.0.0.1}}
+    listen-ip: ${local.sip.client.listen-ip:0.0.0.0}
+
+# ZLM配置
+zlm:
+  enable: ${local.zlm.enable:true}
+  hook-enable: ${local.zlm.hook-enable:true}
+  servers:
+    - server-id: ${local.zlm.server-id:zlm-default}
+      host: ${local.zlm.host:localhost}
+      port: ${local.zlm.port:80}
+      secret: ${local.zlm.secret:zlm}
+  # ZLM Hook 鉴权（合并自原重复 zlm: 块，避免 YAML 重复键导致启动失败）
+  hook:
+    auth:
+      enabled: ${local.zlm.hook.auth.enabled:false}
+      play-secret: ${ZLM_PLAY_SECRET:}
+      publish-secret: ${ZLM_PUBLISH_SECRET:}
+      ip-whitelist: ${local.zlm.hook.auth.ip-whitelist:127.0.0.1}
+
+# sip-gateway 1.8.0 网关配置
+gateway:
+  # 本节点 ID（多节点部署时必填，用于跨节点 INVITE 回包路由）
+  node-id: ${local.gateway.node-id:node-1}
+  # 跨节点转发超时（毫秒）
+  forward-timeout-ms: ${local.gateway.forward-timeout-ms:3000}
+  gb28181:
+    # INVITE 上下文存储类型：memory(单机) | redis(多节点)
+    store:
+      type: ${local.gateway.gb28181.store.type:memory}
+      # Redis-B：type=redis 时生效。InviteRedisConfig 会新建一个 LettuceConnectionFactory，
+      # 它是容器内唯一的 RedisConnectionFactory（Boot 的 redisConnectionFactory /
+      # stringRedisTemplate 因此不再创建），业务缓存与 INVITE 上下文共用该连接。
+      # 不配置时回退 InviteRedisProperties 默认值 127.0.0.1:6379/db1。
+      redis:
+        host: ${local.gateway.gb28181.store.redis.host:127.0.0.1}
+        port: ${local.gateway.gb28181.store.redis.port:6379}
+        database: ${local.gateway.gb28181.store.redis.database:1}
+    # INVITE 上下文 TTL（毫秒）：超时后业务侧回包返回 410
+    invite-context-ttl-ms: ${local.gateway.gb28181.invite-context-ttl-ms:30000}
+    # INVITE 重传幂等窗口（毫秒）：UDP 下设备按 callId 在窗口内幂等去重
+    invite-idempotency-window-ms: ${local.gateway.gb28181.invite-idempotency-window-ms:5000}
+    # GB28181-2022 §9.11 设备订阅（目录/位置/告警）
+    subscription:
+      # 订阅总开关（关闭则 toggle 接口仅持久化意图、不下发）
+      enabled: ${local.gateway.gb28181.subscription.enabled:true}
+      # 目录/告警/位置订阅有效期(秒)
+      default-expires: ${local.gateway.gb28181.subscription.default-expires:3600}
+      # 位置上报间隔(秒)
+      position-interval: ${local.gateway.gb28181.subscription.position-interval:5}
+      # 续订定时任务开关
+      refresh-enabled: ${local.gateway.gb28181.subscription.refresh-enabled:true}
+      # 续订扫描周期(毫秒)
+      refresh-interval-ms: ${local.gateway.gb28181.subscription.refresh-interval-ms:60000}
+      # 过期前多少秒续订
+      refresh-ahead-seconds: ${local.gateway.gb28181.subscription.refresh-ahead-seconds:120}
+  # 级联（作为下级平台主动注册到上级）相关配置；调度类条件 sip.client.enabled=true
+  cascade:
+    # 级联总开关（仅文档/排期占位，实际由 sip.client.enabled 驱动调度 bean）
+    enabled: ${local.gateway.cascade.enabled:false}
+    # REGISTER 发出后等待成功/失败事件的超时时间；超时仍为 REGISTERING 则标记 FAILED
+    register-timeout-sec: ${local.gateway.cascade.register-timeout-sec:30}
+    # 向上级保活心跳间隔(秒)
+    keepalive-interval: ${local.gateway.cascade.keepalive-interval:60}
+    subscribe:
+      # 上级订阅有效期(秒)
+      default-expires: ${local.gateway.cascade.subscribe.default-expires:3600}
+      # 过期订阅清理周期(毫秒)
+      clean-interval-ms: ${local.gateway.cascade.subscribe.clean-interval-ms:60000}
+    record:
+      # 上级录像查询请求超时(秒)，超时标 TIMEOUT
+      request-timeout-sec: ${local.gateway.cascade.record.request-timeout-sec:30}
+      # 超时清理扫描周期(毫秒)
+      clean-interval-ms: ${local.gateway.cascade.record.clean-interval-ms:15000}
+      # 录像列表分批上报大小
+      batch-size: ${local.gateway.cascade.record.batch-size:50}
+    media:
+      # 向上级推流时使用的 ZLM 应用名
+      zlm-app: ${local.gateway.cascade.media.zlm-app:rtp}
+  # 内部命令转发鉴权（合并自原重复 gateway: 块，避免 YAML 重复键导致启动失败）
+  internal-auth:
+    shared-secret: ${INTERNAL_SECRET:CHANGE_ME_IN_PROD}
+    allowed-ips: ${local.gateway.allowed-ips:127.0.0.1}
+  # gateway.nodes 为 Map<String,String>，占位符默认 {} 会被当成字符串无法绑定；
+  # 单节点留空（框架默认空 Map），多节点部署需显式配置 gateway.nodes.{nodeId}=host:port
+
+# Redis-B: INVITE context store (物理隔离，当 gateway.gb28181.store.type=redis 时生效)
+# gateway.gb28181.store.redis 配置块（实际值从 InviteRedisProperties 默认值取，生产通过环境变量注入）
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      zlm:
+        sliding-window-size: 20
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 5
+  bulkhead:
+    instances:
+      zlm:
+        max-concurrent-calls: 50
+
+# P5-§10.4 命令亲和路由（默认关闭，单节点部署完全透明）
+voglander:
+  command:
+    affinity-route:
+      enabled: ${local.command.affinity-route.enabled:false}

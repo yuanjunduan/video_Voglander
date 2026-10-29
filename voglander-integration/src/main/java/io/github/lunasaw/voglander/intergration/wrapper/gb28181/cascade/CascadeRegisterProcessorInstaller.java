@@ -1,0 +1,138 @@
+package io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
+
+import io.github.lunasaw.sip.common.transmit.AbstractSipListener;
+import io.github.lunasaw.sip.common.transmit.CustomerSipListener;
+import io.github.lunasaw.sip.common.transmit.event.request.SipRequestProcessor;
+import io.github.lunasaw.sip.common.transmit.event.response.SipResponseProcessor;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * 把 SIP 栈里默认的 REGISTER 响应处理器换成 {@link CascadeRegisterAuthProcessor}。
+ *
+ * <p>框架的 {@code SipProxyAutoConfig} 在容器启动早期把所有 {@link SipResponseProcessor} bean
+ * 按 method 注册进 {@link AbstractSipListener} 的静态表，同一 method 允许多个处理器顺序执行。
+ * 默认处理器会用全局客户端身份做 401 重认证（对级联上级必然 403），因此这里在
+ * {@link ApplicationReadyEvent} 时把它摘掉、只保留级联处理器。
+ *
+ * <p>顺序必须早于 {@code CascadeClientScheduler#onApplicationReady}：后者以 initialDelay=0
+ * 立刻发出首个 REGISTER，若此时处理器还没换过来，第一条 401 就会走错分支。
+ */
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class CascadeRegisterProcessorInstaller {
+
+    private static final String METHOD_REGISTER = "REGISTER";
+    private static final String METHOD_MESSAGE  = "MESSAGE";
+    private static final String METHOD_ACK      = CascadeAckRequestProcessor.METHOD_ACK;
+
+    private final ApplicationContext applicationContext;
+
+    @EventListener(ApplicationReadyEvent.class)
+    @Order(Ordered.HIGHEST_PRECEDENCE)
+    public void install() {
+        AbstractSipListener listener = CustomerSipListener.getInstance();
+        if (listener == null) {
+            log.warn("SIP 监听器尚未初始化，跳过级联注册处理器装配");
+            return;
+        }
+
+        Map<String, SipResponseProcessor> beans = applicationContext.getBeansOfType(SipResponseProcessor.class);
+
+        installMessageAliveProcessor(listener, beans);
+
+        installAckProcessor(listener);
+
+        List<SipResponseProcessor>        registerProcessors = new ArrayList<>();
+        CascadeRegisterAuthProcessor      cascadeProcessor    = null;
+        for (SipResponseProcessor processor : beans.values()) {
+            if (!METHOD_REGISTER.equalsIgnoreCase(processor.getMethod())) {
+                continue;
+            }
+            registerProcessors.add(processor);
+            if (processor instanceof CascadeRegisterAuthProcessor authProcessor) {
+                cascadeProcessor = authProcessor;
+            }
+        }
+
+        if (cascadeProcessor == null) {
+            log.warn("未找到 CascadeRegisterAuthProcessor bean，级联 401 重认证仍走框架默认身份");
+            return;
+        }
+
+        for (SipResponseProcessor processor : registerProcessors) {
+            listener.removeResponseProcessor(METHOD_REGISTER, processor);
+        }
+        listener.addResponseProcessor(METHOD_REGISTER, cascadeProcessor);
+        log.info("级联注册响应处理器已接管: 摘除默认处理器 {} 个，当前注册处理器={}",
+            registerProcessors.size() - 1, cascadeProcessor.getClass().getSimpleName());
+    }
+
+    /**
+     * 注册 MESSAGE 响应监听（上级存活信号）。与 REGISTER 不同，这里**不做替换**：
+     * 框架自带的 MESSAGE 处理器仍照常工作，本监听只是旁路登记。
+     *
+     * <p>框架的 {@code SipProxyAutoConfig} 通常已经按 method 自动注册过该 bean，
+     * 因此这里先查表再补，避免同一实例被登记两次（同一响应会被处理两遍）。
+     */
+    private void installMessageAliveProcessor(AbstractSipListener listener,
+        Map<String, SipResponseProcessor> beans) {
+        CascadeMessageResponseProcessor aliveProcessor = null;
+        for (SipResponseProcessor processor : beans.values()) {
+            if (processor instanceof CascadeMessageResponseProcessor messageProcessor) {
+                aliveProcessor = messageProcessor;
+                break;
+            }
+        }
+        if (aliveProcessor == null) {
+            log.warn("未找到 CascadeMessageResponseProcessor bean，级联心跳超时判定将缺少存活信号");
+            return;
+        }
+
+        List<SipResponseProcessor> current = listener.getResponseProcessors(METHOD_MESSAGE);
+        if (current != null && current.contains(aliveProcessor)) {
+            log.info("级联 MESSAGE 响应监听已存在: 当前 MESSAGE 处理器 {} 个", current.size());
+            return;
+        }
+        listener.addResponseProcessor(METHOD_MESSAGE, aliveProcessor);
+        List<SipResponseProcessor> after = listener.getResponseProcessors(METHOD_MESSAGE);
+        log.info("级联 MESSAGE 响应监听已注册: 当前 MESSAGE 处理器 {} 个",
+            after == null ? 1 : after.size());
+    }
+
+    /**
+     * 注册 ACK <b>请求</b> 监听：把上级对 INVITE 的确认翻译成 {@link io.github.lunasaw.gbproxy.client.eventbus.event.ClientAckEvent}。
+     *
+     * <p>框架自带的 {@code ClientAckResponseProcessor} 挂在响应分派表上，而 ACK 是请求，
+     * 因此 {@code ClientAckEvent} 在正常流程中永远不会被发布；不补这一步，
+     * {@link CascadeMediaInviteListener} 的"ACK 后推流"就永远等不到事件。
+     */
+    private void installAckProcessor(AbstractSipListener listener) {
+        CascadeAckRequestProcessor ackProcessor =
+            applicationContext.getBeanProvider(CascadeAckRequestProcessor.class).getIfAvailable();
+        if (ackProcessor == null) {
+            log.warn("未找到 CascadeAckRequestProcessor bean，级联点播将缺少 ACK 触发信号");
+            return;
+        }
+        List<SipRequestProcessor> current = listener.getRequestProcessors(METHOD_ACK);
+        if (current != null && current.contains(ackProcessor)) {
+            log.info("级联 ACK 请求监听已存在: 当前 ACK 处理器 {} 个", current.size());
+            return;
+        }
+        listener.addRequestProcessor(METHOD_ACK, ackProcessor);
+        List<SipRequestProcessor> after = listener.getRequestProcessors(METHOD_ACK);
+        log.info("级联 ACK 请求监听已注册: 当前 ACK 处理器 {} 个", after == null ? 1 : after.size());
+    }
+}

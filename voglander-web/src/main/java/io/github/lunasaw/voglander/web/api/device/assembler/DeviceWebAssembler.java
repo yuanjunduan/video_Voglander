@@ -1,0 +1,217 @@
+package io.github.lunasaw.voglander.web.api.device.assembler;
+
+import io.github.lunasaw.voglander.common.constant.device.DeviceConstant;
+import io.github.lunasaw.voglander.common.enums.DeviceAgreementEnum;
+import io.github.lunasaw.voglander.manager.domaon.dto.DeviceDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.DeviceQueryDTO;
+import io.github.lunasaw.voglander.web.api.device.req.DeviceCreateReq;
+import io.github.lunasaw.voglander.web.api.device.req.DevicePageReq;
+import io.github.lunasaw.voglander.web.api.device.req.DeviceUpdateReq;
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.stereotype.Component;
+
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.Collections;
+import java.util.List;
+import java.util.stream.Collectors;
+
+/**
+ * Web层设备数据转换器
+ * 负责处理 Req -> DTO 的转换
+ *
+ * @author luna
+ * @date 2024/01/30
+ */
+@Component
+public class DeviceWebAssembler {
+
+    /**
+     * 将 DeviceCreateReq 转换为 DeviceDTO
+     *
+     * @param createReq 创建设备请求对象
+     * @return DeviceDTO
+     */
+    public DeviceDTO toDeviceDTO(DeviceCreateReq createReq) {
+        if (createReq == null) {
+            return null;
+        }
+
+        DeviceDTO deviceDTO = new DeviceDTO();
+        deviceDTO.setDeviceId(createReq.getDeviceId());
+        deviceDTO.setName(createReq.getName());
+        deviceDTO.setIp(createReq.getIp());
+        deviceDTO.setPort(createReq.getPort());
+
+        // 优先使用subType和protocol来确定type值
+        Integer type = getTypeFromSubTypeAndProtocol(createReq.getSubType(), createReq.getProtocol(), createReq.getType());
+        deviceDTO.setType(type);
+
+        deviceDTO.setServerIp(createReq.getServerIp());
+
+        // 默认离线；仅当调用方显式上报在线（拉流设备创建前的 RTSP 探活结果）时才置 ONLINE。
+        // GB28181 的在线态仍由注册/心跳信令驱动，不受该字段影响。
+        Integer initialStatus = createReq.getStatus();
+        deviceDTO.setStatus(initialStatus != null && initialStatus == DeviceConstant.Status.ONLINE
+            ? DeviceConstant.Status.ONLINE
+            : DeviceConstant.Status.OFFLINE);
+
+        // 转换扩展信息
+        if (createReq.getExtendInfo() != null) {
+            DeviceDTO.ExtendInfo extendInfo = new DeviceDTO.ExtendInfo();
+            extendInfo.setSerialNumber(createReq.getExtendInfo().getSerialNumber());
+            extendInfo.setTransport(createReq.getExtendInfo().getTransport());
+            // expires 在 DTO 中是基本类型，请求未传时 Integer 拆箱会抛 NPE，此处按"未设置"跳过
+            if (createReq.getExtendInfo().getExpires() != null) {
+                extendInfo.setExpires(createReq.getExtendInfo().getExpires());
+            }
+            extendInfo.setPassword(createReq.getExtendInfo().getPassword());
+            extendInfo.setStreamMode(createReq.getExtendInfo().getStreamMode());
+            extendInfo.setCharset(createReq.getExtendInfo().getCharset());
+            extendInfo.setRtspUrl(createReq.getExtendInfo().getRtspUrl());
+            extendInfo.setRtspSubUrl(createReq.getExtendInfo().getRtspSubUrl());
+            extendInfo.setDeviceInfo(createReq.getExtendInfo().getDeviceInfo());
+            deviceDTO.setExtendInfo(extendInfo);
+        }
+
+        return deviceDTO;
+    }
+
+    /**
+     * 批量将 DeviceCreateReq 转换为 DeviceDTO
+     *
+     * @param createReqList 创建设备请求对象列表
+     * @return DeviceDTO 列表
+     */
+    public List<DeviceDTO> toDeviceDTOList(List<DeviceCreateReq> createReqList) {
+        if (createReqList == null || createReqList.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return createReqList.stream()
+            .map(this::toDeviceDTO)
+            .collect(Collectors.toList());
+    }
+
+    /**
+     * 将 DeviceUpdateReq 转换为 DeviceDTO
+     *
+     * @param updateReq 更新设备请求对象
+     * @return DeviceDTO
+     */
+    public DeviceDTO toDeviceDTO(DeviceUpdateReq updateReq) {
+        if (updateReq == null) {
+            return null;
+        }
+
+        DeviceDTO deviceDTO = new DeviceDTO();
+        deviceDTO.setId(updateReq.getId());
+        deviceDTO.setDeviceId(updateReq.getDeviceId());
+        deviceDTO.setName(updateReq.getName());
+        deviceDTO.setIp(updateReq.getIp());
+        deviceDTO.setPort(updateReq.getPort());
+
+        // 优先使用subType和protocol来确定type值
+        Integer type = getTypeFromSubTypeAndProtocol(updateReq.getSubType(), updateReq.getProtocol(), updateReq.getType());
+        deviceDTO.setType(type);
+
+        deviceDTO.setServerIp(updateReq.getServerIp());
+        deviceDTO.setStatus(updateReq.getStatus());
+
+        // 转换扩展信息
+        if (updateReq.getExtendInfo() != null) {
+            DeviceDTO.ExtendInfo extendInfo = new DeviceDTO.ExtendInfo();
+            extendInfo.setSerialNumber(updateReq.getExtendInfo().getSerialNumber());
+            extendInfo.setTransport(updateReq.getExtendInfo().getTransport());
+            // expires 在 DTO 中是基本类型，请求未传时 Integer 拆箱会抛 NPE，此处按"未设置"跳过
+            if (updateReq.getExtendInfo().getExpires() != null) {
+                extendInfo.setExpires(updateReq.getExtendInfo().getExpires());
+            }
+            extendInfo.setPassword(updateReq.getExtendInfo().getPassword());
+            extendInfo.setStreamMode(updateReq.getExtendInfo().getStreamMode());
+            extendInfo.setCharset(updateReq.getExtendInfo().getCharset());
+            extendInfo.setRtspUrl(updateReq.getExtendInfo().getRtspUrl());
+            extendInfo.setRtspSubUrl(updateReq.getExtendInfo().getRtspSubUrl());
+            extendInfo.setDeviceInfo(updateReq.getExtendInfo().getDeviceInfo());
+            deviceDTO.setExtendInfo(extendInfo);
+        }
+
+        return deviceDTO;
+    }
+
+    /**
+     * 批量将 DeviceUpdateReq 转换为 DeviceDTO
+     *
+     * @param updateReqList 更新设备请求对象列表
+     * @return DeviceDTO 列表
+     */
+    public List<DeviceDTO> toUpdateDeviceDTOList(List<DeviceUpdateReq> updateReqList) {
+        if (updateReqList == null || updateReqList.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return updateReqList.stream()
+            .map(this::toDeviceDTO)
+            .collect(Collectors.toList());
+    }
+
+    /**
+     * 将 Web 层分页查询请求 {@link DevicePageReq} 转为 Manager 查询条件 {@link DeviceQueryDTO}。
+     *
+     * <p>
+     * 时间字段从 Unix 毫秒转 LocalDateTime（系统时区），符合 Web 毫秒 ↔ DTO LocalDateTime 规约。
+     * </p>
+     *
+     * @param req 分页查询请求（可空）
+     * @return 查询条件 DTO；入参为空返回空条件（查全量）
+     */
+    public DeviceQueryDTO pageReqToQueryDto(DevicePageReq req) {
+        DeviceQueryDTO dto = new DeviceQueryDTO();
+        if (req == null) {
+            return dto;
+        }
+        dto.setId(req.getId());
+        dto.setDeviceId(req.getDeviceId());
+        dto.setName(req.getName());
+        dto.setStatus(req.getStatus());
+        dto.setType(req.getType());
+        dto.setIp(req.getIp());
+        dto.setServerIp(req.getServerIp());
+        dto.setKeepaliveTimeStart(toLocalDateTime(req.getKeepaliveTimeStart()));
+        dto.setKeepaliveTimeEnd(toLocalDateTime(req.getKeepaliveTimeEnd()));
+        dto.setRegisterTimeStart(toLocalDateTime(req.getRegisterTimeStart()));
+        dto.setRegisterTimeEnd(toLocalDateTime(req.getRegisterTimeEnd()));
+        return dto;
+    }
+
+    /**
+     * Unix 毫秒 → LocalDateTime（系统时区）；null 透传。
+     */
+    private LocalDateTime toLocalDateTime(Long epochMilli) {
+        if (epochMilli == null) {
+            return null;
+        }
+        return LocalDateTime.ofInstant(Instant.ofEpochMilli(epochMilli), ZoneId.systemDefault());
+    }
+
+    /**
+     * 根据设备种类和协议获取type值
+     * 优先使用subType和protocol，如果无法找到对应枚举则使用原始type值
+     *
+     * @param subType 设备种类
+     * @param protocol 设备协议
+     * @param originalType 原始type值
+     * @return type值
+     */
+    private Integer getTypeFromSubTypeAndProtocol(Integer subType, Integer protocol, Integer originalType) {
+        // 如果subType和protocol都不为空，则通过它们查找对应的type值
+        if (subType != null && protocol != null) {
+            Integer typeFromEnum = DeviceAgreementEnum.getTypeBySubTypeAndProtocol(subType, protocol);
+            if (typeFromEnum != null) {
+                return typeFromEnum;
+            }
+        }
+
+        // 如果无法通过subType和protocol找到对应的枚举，则使用原始的type值
+        return originalType;
+    }
+}
