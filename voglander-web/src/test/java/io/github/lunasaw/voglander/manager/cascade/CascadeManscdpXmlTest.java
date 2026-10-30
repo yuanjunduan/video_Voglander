@@ -120,4 +120,52 @@ class CascadeManscdpXmlTest {
         assertTrue(xml.contains("<PresetID>1</PresetID>"), xml);
         assertTrue(xml.contains("<PresetName>后门</PresetName>"), xml);
     }
+
+    @Test
+    @DisplayName("encode：声明与字节一致，GB2312 中文可回解")
+    void encode_gb2312_declarationMatchesBytes() throws Exception {
+        String xml = CascadeManscdpXml.broadcastResponse("1", "1", "OK")
+            .replace("<Result>OK</Result>", "<Result>主控中心2</Result>");
+
+        byte[] bytes = CascadeManscdpXml.encode(xml, "GB2312");
+
+        String decoded = new String(bytes, "GB2312");
+        assertTrue(decoded.startsWith("<?xml version=\"1.0\" encoding=\"GB2312\"?>"), decoded);
+        assertTrue(decoded.contains("<Result>主控中心2</Result>"), "按声明解码必须得到原文: " + decoded);
+        /* UTF-8 字节比 GB2312 长，用长度交叉验证确实转码了，而不是原样输出 */
+        assertEquals(xml.getBytes("GB2312").length, bytes.length);
+        assertNotEquals(xml.getBytes("UTF-8").length, bytes.length);
+    }
+
+    @Test
+    @DisplayName("encode：平台 charset=UTF-8 时声明也改成 UTF-8")
+    void encode_utf8_rewritesDeclaration() throws Exception {
+        String xml = CascadeManscdpXml.broadcastResponse("1", "1", "OK");
+
+        byte[] bytes = CascadeManscdpXml.encode(xml, "UTF-8");
+
+        String decoded = new String(bytes, "UTF-8");
+        assertTrue(decoded.startsWith("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"), decoded);
+    }
+
+    @Test
+    @DisplayName("encode：charset 为空或非法时回落 GB2312")
+    void encode_fallsBackToDefault() throws Exception {
+        String xml = CascadeManscdpXml.broadcastResponse("1", "1", "主控中心");
+
+        String blank = new String(CascadeManscdpXml.encode(xml, "  "), "GB2312");
+        String illegal = new String(CascadeManscdpXml.encode(xml, "NOT-A-CHARSET"), "GB2312");
+
+        assertTrue(blank.contains("encoding=\"GB2312\""), blank);
+        assertTrue(illegal.contains("encoding=\"GB2312\""), illegal);
+        assertTrue(illegal.contains("<Result>主控中心</Result>"), illegal);
+    }
+
+    @Test
+    @DisplayName("encode：无 XML 声明时原样转字节，不补声明")
+    void encode_withoutDeclaration() throws Exception {
+        byte[] bytes = CascadeManscdpXml.encode("<Response/>", "GB2312");
+
+        assertEquals("<Response/>", new String(bytes, "GB2312"));
+    }
 }

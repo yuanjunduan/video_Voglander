@@ -190,4 +190,52 @@ class CascadeUpperMessengerTest {
             sender.verify(() -> SipSender.transmitRequest(eq(LOCAL_IP), eq(request), isNull(), isNull()));
         }
     }
+
+    @Test
+    @DisplayName("报文按平台 charset 重编字节：声明与字节一致，中文才不会变成乱码")
+    void send_encodesPayloadWithPlatformCharset() throws Exception {
+        /* 渲染层只会输出 GB2312 声明；这里故意给一份 UTF-8 声明，验证发送层会改写 */
+        String xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n <DeviceName>主控中心</DeviceName>\n</Response>\n";
+        try (MockedStatic<SipRequestBuilderFactory> builder = mockStatic(SipRequestBuilderFactory.class);
+            MockedStatic<SipSender> sender = mockStatic(SipSender.class)) {
+            builder.when(() -> SipRequestBuilderFactory.createMessageRequest(any(), any(), anyString(), anyString()))
+                .thenReturn(request);
+
+            messenger.send(platform(), xml, "in-call", null);
+
+            ArgumentCaptor<Object> payload = ArgumentCaptor.forClass(Object.class);
+            verify(request).setContent(payload.capture(), isNull());
+            byte[] bytes = (byte[]) payload.getValue();
+            assertEquals(xml.replace("UTF-8", "GB2312").getBytes("GB2312").length, bytes.length,
+                "必须按 GB2312 出字节，而不是 UTF-8");
+
+            String decoded = new String(bytes, "GB2312");
+            assertTrue(decoded.contains("encoding=\"GB2312\""), "声明要跟着字节一起改: " + decoded);
+            assertTrue(decoded.contains("<DeviceName>主控中心</DeviceName>"), "按声明解码必须得到原文: " + decoded);
+        }
+    }
+
+    @Test
+    @DisplayName("平台 charset=UTF-8 时字节与声明都走 UTF-8")
+    void send_utf8Platform() throws Exception {
+        CascadePlatformDTO platform = platform();
+        platform.setCharset("UTF-8");
+        String xml = "<?xml version=\"1.0\" encoding=\"GB2312\"?>\n<Response>\n <DeviceName>主控中心</DeviceName>\n</Response>\n";
+        try (MockedStatic<SipRequestBuilderFactory> builder = mockStatic(SipRequestBuilderFactory.class);
+            MockedStatic<SipSender> sender = mockStatic(SipSender.class)) {
+            builder.when(() -> SipRequestBuilderFactory.createMessageRequest(any(), any(), anyString(), anyString()))
+                .thenReturn(request);
+
+            messenger.send(platform, xml, "in-call", null);
+
+            ArgumentCaptor<Object> payload = ArgumentCaptor.forClass(Object.class);
+            verify(request).setContent(payload.capture(), isNull());
+            byte[] bytes = (byte[]) payload.getValue();
+            String decoded = new String(bytes, "UTF-8");
+            assertTrue(decoded.contains("encoding=\"UTF-8\""), decoded);
+            assertTrue(decoded.contains("<DeviceName>主控中心</DeviceName>"), decoded);
+            assertNotEquals(xml.replace("GB2312", "UTF-8").getBytes("GB2312").length, bytes.length,
+                "平台配 UTF-8 时不能再用 GB2312 出字节");
+        }
+    }
 }

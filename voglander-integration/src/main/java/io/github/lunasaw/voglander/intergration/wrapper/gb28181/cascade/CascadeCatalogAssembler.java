@@ -143,7 +143,8 @@ public class CascadeCatalogAssembler {
     /**
      * 渲染一条 Catalog NOTIFY 的 MANSCDP 报文。
      *
-     * <p>编码用 UTF-8 而非规范推荐的 GB2312：与框架现有级联消息（保活等）保持一致，上级实测可解析。
+     * <p>头部声明写 GB2312，实际字节由发送层 {@code CascadeManscdpXml.encode} 按
+     * {@code tb_cascade_platform.charset} 转换——两边必须一致，否则上级按声明解码会把中文读成乱码。
      *
      * @param domainId 域节点编码，写在报文头的 {@code DeviceID}
      * @param sn       上级订阅/查询报文里的 SN，必须原样带回
@@ -173,9 +174,9 @@ public class CascadeCatalogAssembler {
      * 目录报文骨架：{@code <Notify>} 与 {@code <Response>} 仅根元素不同。
      *
      * <p><b>报文外观对齐参考实现 CSS</b>（{@code manscdp/marshal.go}）：换行用 {@code \n}、
-     * 除首行外每行一个前导空格、声明 {@code encoding="GB2312"}。声明与实际字节并不严格一致
-     * （CSS 用 {@code xml.MarshalIndent} 输出 UTF-8 字节、只在头部写死 GB2312，无转码），
-     * 上级实测不校验声明；保持与参考实现同形，避免上级对报文形态做兼容分支时行为分叉。
+     * 除首行外每行一个前导空格、声明 {@code encoding="GB2312"}。CSS 输出的是 UTF-8 字节、只在头部
+     * 写死 GB2312，海康 iSecure Center 会按声明解码，导致中文名全成乱码——本实现在发送前按平台字符集
+     * 重编字节（{@link CascadeManscdpXml#encode}），保持声明与实际字节一致。
      */
     private String renderCatalog(String root, String deviceId, String sn, int sumNum, List<CascadeCatalogNode> nodes) {
         StringBuilder xml = new StringBuilder(400 + nodes.size() * 240);

@@ -1,7 +1,9 @@
 package io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade;
 
+import java.text.ParseException;
 import java.util.List;
 
+import javax.sip.header.ContentTypeHeader;
 import javax.sip.message.Request;
 
 import org.apache.commons.lang3.StringUtils;
@@ -163,9 +165,12 @@ public class CascadeNotifyPublisher {
      * <p>注意：对上级 Query 的<b>应答</b>（{@code CascadeQueryHandler}）必须沿用入站 Call-ID，
      * 不能走本方法。
      */
-    private String sendIsolated(Endpoint ep, String content, String eventId) {
+    private String sendIsolated(Endpoint ep, String content, String eventId) throws ParseException {
         String callId = SipRequestUtils.getNewCallId();
         Request request = SipRequestBuilderFactory.createNotifyRequest(ep.from, ep.to, content, callId);
+        /* 按平台 charset 重写报文字节，与报文头声明保持一致（否则上级按声明解码，中文名全乱码） */
+        request.setContent(CascadeManscdpXml.encode(content, ep.charset),
+            (ContentTypeHeader) request.getHeader(ContentTypeHeader.NAME));
         request.addHeader(SipRequestUtils.createEventHeader("Catalog", eventId));
         request.addHeader(SipRequestUtils.createSubscriptionStateHeader("active"));
         SipSender.transmitRequest(ep.from.getIp(), request);
@@ -265,11 +270,11 @@ public class CascadeNotifyPublisher {
         return endpoint(platform);
     }
 
-    /** 构造端点：From 用平台身份（localClientId），To 用上级身份。 */
+    /** 构造端点：From 用平台身份（localClientId），To 用上级身份；同时带上推送用的字符集。 */
     private Endpoint endpoint(CascadePlatformDTO platform) {
         FromDevice from = cascadeDeviceSupplier.buildFromDevice(platform);
         ToDevice   to   = cascadeDeviceSupplier.buildToDevice(platform);
-        return new Endpoint(from, to);
+        return new Endpoint(from, to, platform.getCharset());
     }
 
     private Double parseDouble(String s) {
@@ -286,10 +291,13 @@ public class CascadeNotifyPublisher {
     private static final class Endpoint {
         final FromDevice from;
         final ToDevice   to;
+        /** 上级平台字符集（{@code tb_cascade_platform.charset}），决定报文实际字节与头部声明 */
+        final String     charset;
 
-        Endpoint(FromDevice from, ToDevice to) {
+        Endpoint(FromDevice from, ToDevice to, String charset) {
             this.from = from;
             this.to = to;
+            this.charset = charset;
         }
     }
 }

@@ -1,5 +1,6 @@
 package io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade;
 
+import javax.sip.header.ContentTypeHeader;
 import javax.sip.message.Request;
 
 import org.apache.commons.lang3.StringUtils;
@@ -78,9 +79,13 @@ public class CascadeUpperMessenger {
         String actualCallId = StringUtils.isNotBlank(callId) ? callId : SipRequestUtils.getNewCallId();
         try {
             Request request = SipRequestBuilderFactory.createMessageRequest(from, to, xml, actualCallId);
+            /* 按平台 charset 重写报文字节：jain-sip 对 String 内容固定出 UTF-8 字节，
+               与报文头声明的 GB2312 不一致，上级按声明解码会把中文读成乱码 */
+            byte[] payload = CascadeManscdpXml.encode(xml, platform.getCharset());
+            request.setContent(payload, (ContentTypeHeader) request.getHeader(ContentTypeHeader.NAME));
             SipSender.transmitRequest(from.getIp(), request, null, okEvent);
-            log.debug("级联 MESSAGE 已发送: platformId={}, callId={}, 报文长度={}",
-                platform.getPlatformId(), actualCallId, xml.length());
+            log.debug("级联 MESSAGE 已发送: platformId={}, callId={}, 报文长度={}字节, charset={}",
+                platform.getPlatformId(), actualCallId, payload.length, platform.getCharset());
             return actualCallId;
         } catch (Exception e) {
             log.error("级联 MESSAGE 发送失败: platformId={}, callId={}", platform.getPlatformId(), actualCallId, e);

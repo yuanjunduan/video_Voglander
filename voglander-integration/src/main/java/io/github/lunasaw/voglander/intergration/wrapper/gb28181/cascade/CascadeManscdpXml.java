@@ -1,8 +1,10 @@
 package io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade;
 
+import java.nio.charset.Charset;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.regex.Matcher;
 
 import org.apache.commons.lang3.StringUtils;
 
@@ -17,6 +19,7 @@ import org.apache.commons.lang3.StringUtils;
  *
  * <p><b>报文外观</b>与 {@link CascadeCatalogAssembler} 保持一致：{@code \n} 换行、除首行外每行一个
  * 前导空格、声明 {@code encoding="GB2312"}、可选字段为空时整段省略（空标签会被上级当成非法节点）。
+ * 声明与实际字节的一致性由 {@link #encode} 保证：发送前按上级平台 {@code charset} 重编字节并同步改写声明。
  *
  * @author luna
  */
@@ -24,7 +27,11 @@ public final class CascadeManscdpXml {
 
     private static final String          LF         = "\n";
     private static final String          INDENT     = " ";
-    private static final String          DECLARATION = "<?xml version=\"1.0\" encoding=\"GB2312\"?>";
+
+    /** 平台未配置 {@code charset} 时的默认字符集（国标信令惯例）。 */
+    public static final String           DEFAULT_CHARSET = "GB2312";
+
+    private static final String          DECLARATION = declaration(DEFAULT_CHARSET);
 
     /** 国标 DeviceTime 格式（§9.5.3.3 要求 {@code yyyy-MM-ddTHH:mm:ss}） */
     private static final DateTimeFormatter DEVICE_TIME =
@@ -142,6 +149,46 @@ public final class CascadeManscdpXml {
         return new StringBuilder(256)
             .append(DECLARATION).append(LF)
             .append('<').append(root).append('>').append(LF);
+    }
+
+    /**
+     * 把渲染好的字符串报文按上级平台字符集转成字节，并同步改写 XML 声明的 {@code encoding}。
+     *
+     * <p><b>为什么必须显式转字节</b>：报文以 {@code String} 交给 jain-sip 时，{@code StringMessage}
+     * 固定按 UTF-8 出字节（Content-Type 不带 charset 参数），而头部声明写的是 GB2312。
+     * 上级只要按声明解码，就会把 UTF-8 字节当 GB2312 读，中文名全成乱码
+     * （海康 iSecure Center 实测如此：「主控中心2」显示为「混给带洞口2」）。
+     * 因此发送前统一转成与声明一致的字节，声明取值跟随 {@code tb_cascade_platform.charset}。
+     *
+     * <p>字符集无法解析时回落 {@link #DEFAULT_CHARSET}；GB2312 无法表示的字符（生僻字、emoji）
+     * 会被编码成 {@code ?}，这是字符集本身的局限，不是丢数据。
+     *
+     * @param xml     渲染出的 MANSCDP 报文（头部声明可任意，本方法会改写）
+     * @param charset 上级平台字符集，空则用 {@link #DEFAULT_CHARSET}
+     */
+    public static byte[] encode(String xml, String charset) {
+        if (StringUtils.isBlank(xml)) {
+            return new byte[0];
+        }
+        Charset cs = charsetOf(charset);
+        String body = xml.startsWith("<?xml")
+            ? xml.replaceFirst("(?s)^<\\?xml[^>]*\\?>", Matcher.quoteReplacement(declaration(cs.name())))
+            : xml;
+        return body.getBytes(cs);
+    }
+
+    /** 解析字符集名，非法值回落 {@link #DEFAULT_CHARSET}，避免一条配置错误把整轮推送打断。 */
+    private static Charset charsetOf(String charset) {
+        String name = StringUtils.defaultIfBlank(charset, DEFAULT_CHARSET);
+        try {
+            return Charset.forName(name);
+        } catch (IllegalArgumentException e) {
+            return Charset.forName(DEFAULT_CHARSET);
+        }
+    }
+
+    private static String declaration(String charset) {
+        return "<?xml version=\"1.0\" encoding=\"" + charset + "\"?>";
     }
 
     /** 报文收尾：根元素闭标签 + 结尾换行（与目录应答同形）。 */
