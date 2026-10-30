@@ -345,4 +345,42 @@ class CascadeNotifyPublisherTest {
             mocked.verify(() -> ClientCommandSender.sendAlarmNotify(any(), any(), any()), never());
         }
     }
+
+    /* ---- pushCatalogDelete（删除节点必须显式发 DEL） ---- */
+
+    @Test
+    @DisplayName("目录删除：发一条带 Event=DEL 的 Catalog 通知，不查通道表")
+    void catalog_delete_pushes_del_item() {
+        String pf = "PF9";
+        stubEndpoint(pf);
+        when(cascadeSubscribeManager.listActiveByType(SubType.CATALOG)).thenReturn(List.of(sub(pf, "11436")));
+
+        try (MockedStatic<SipRequestBuilderFactory> factoryMock = mockStatic(SipRequestBuilderFactory.class);
+             MockedStatic<SipSender> sipMock = mockStatic(SipSender.class);
+             MockedStatic<SipRequestUtils> utilsMock = mockStatic(SipRequestUtils.class)) {
+            List<String> messages = startSipCapture(factoryMock, utilsMock);
+
+            publisher.pushCatalogDelete(pf, "34020000002150000002");
+
+            assertEquals(1, messages.size(), "删除只发一包");
+            String xml = messages.get(0);
+            assertTrue(xml.contains("<Event>DEL</Event>"), "没有 Event，上级只做 upsert: " + xml);
+            assertTrue(xml.contains("<DeviceID>34020000002150000002</DeviceID>"), xml);
+            assertTrue(xml.contains("<SumNum>1</SumNum>"), xml);
+            assertTrue(xml.contains("<DeviceList Num=\"1\">"), xml);
+            sipMock.verify(() -> SipSender.transmitRequest(any(), any()), times(1));
+            utilsMock.verify(() -> SipRequestUtils.createEventHeader("Catalog", "11436"), times(1));
+            /* 已删记录的通道查不回来，靠编码直发才能不漏发 */
+            verify(cascadeChannelManager, never()).getByPlatformAndChannel(any(), any());
+        }
+    }
+
+    @Test
+    @DisplayName("目录删除：cascadeId 为空时一包不发")
+    void catalog_delete_blank_id_should_skip() {
+        try (MockedStatic<SipRequestBuilderFactory> factoryMock = mockStatic(SipRequestBuilderFactory.class)) {
+            publisher.pushCatalogDelete("PF9", "  ");
+            factoryMock.verifyNoInteractions();
+        }
+    }
 }

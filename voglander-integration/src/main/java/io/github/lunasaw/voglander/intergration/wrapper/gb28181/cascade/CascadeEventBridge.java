@@ -57,12 +57,18 @@ public class CascadeEventBridge {
      *
      * <p>这类变化动的是父子关系，一次 {@code Catalog Event} 只能带一个节点，
      * 上级无法据此把节点挂到新父节点下，会留下孤儿条目。快照重推能保证父子一致。
+     *
+     * <p><b>删除必须额外发 DEL</b>：快照是增量 upsert 语义，上级不会因为节点「这次没出现」
+     * 就删除它（海康实测 200 OK 但目录不变）。
      */
     @EventListener
     @Async("sipNotifierExecutor")
     public void onCatalogStructureChange(LocalCascadeCatalogChangeEvent e) {
         log.info("级联目录结构变更，重推快照: platformId={}, scope={}, cascadeId={}, event={}",
             e.getPlatformId(), e.getScope(), e.getCascadeId(), e.getEvent());
+        if ("DEL".equalsIgnoreCase(e.getEvent())) {
+            notifyPublisher.pushCatalogDelete(e.getPlatformId(), e.getCascadeId());
+        }
         notifyPublisher.pushCatalogSnapshot(e.getPlatformId(), null);
     }
 

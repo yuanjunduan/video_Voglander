@@ -2,6 +2,8 @@ package io.github.lunasaw.voglander.manager.cascade;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import java.util.Map;
@@ -10,10 +12,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import io.github.lunasaw.voglander.common.event.AlarmCreatedEvent;
+import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
 import io.github.lunasaw.voglander.common.event.LocalChannelChangeEvent;
 import io.github.lunasaw.voglander.common.event.LocalMobilePositionEvent;
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeEventBridge;
@@ -64,5 +68,27 @@ class CascadeEventBridgeTest {
     void alarm_event_null_payload_should_not_throw() {
         bridge.onAlarm(new AlarmCreatedEvent("DEV", null));
         verify(notifyPublisher).pushAlarm(eq("DEV"), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("组织删除：先发 DEL 通知，再重推整快照")
+    void org_delete_should_push_del_then_snapshot() {
+        InOrder order = inOrder(notifyPublisher);
+
+        bridge.onCatalogStructureChange(
+            new LocalCascadeCatalogChangeEvent("PLAT", "ORG", "34020000002150000002", "DEL"));
+
+        order.verify(notifyPublisher).pushCatalogDelete("PLAT", "34020000002150000002");
+        order.verify(notifyPublisher).pushCatalogSnapshot("PLAT", null);
+    }
+
+    @Test
+    @DisplayName("组织新增：只重推快照，不发 DEL")
+    void org_add_should_only_push_snapshot() {
+        bridge.onCatalogStructureChange(
+            new LocalCascadeCatalogChangeEvent("PLAT", "ORG", "34020000002150000002", "ADD"));
+
+        verify(notifyPublisher, never()).pushCatalogDelete(any(), any());
+        verify(notifyPublisher).pushCatalogSnapshot("PLAT", null);
     }
 }

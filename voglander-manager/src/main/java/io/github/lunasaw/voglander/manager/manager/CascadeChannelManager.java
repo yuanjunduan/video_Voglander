@@ -99,11 +99,17 @@ public class CascadeChannelManager {
 
     public boolean deleteOne(CascadeChannelDTO dto) {
         Assert.notNull(dto, "dto 不能为空");
+        /* 删前留底：删完查不到平台编码/通道编码，就发不出 DEL 通知 */
+        CascadeChannelDTO existed = dto.getId() != null ? getById(dto.getId()) : null;
         LambdaQueryWrapper<CascadeChannelDO> qw = new LambdaQueryWrapper<>();
         qw.eq(dto.getPlatformId() != null, CascadeChannelDO::getPlatformId, dto.getPlatformId())
           .eq(dto.getLocalChannelId() != null, CascadeChannelDO::getLocalChannelId, dto.getLocalChannelId())
           .eq(dto.getId() != null, CascadeChannelDO::getId, dto.getId());
-        return cascadeChannelService.remove(qw);
+        boolean ok = cascadeChannelService.remove(qw);
+        if (ok) {
+            publishDeleted(existed != null ? existed : dto);
+        }
+        return ok;
     }
 
     public CascadeChannelDTO getById(Long id) {
@@ -165,7 +171,29 @@ public class CascadeChannelManager {
 
     public boolean delete(Long id) {
         Assert.notNull(id, "id 不能为空");
-        return cascadeChannelService.removeById(id);
+        CascadeChannelDTO existed = getById(id);
+        boolean ok = cascadeChannelService.removeById(id);
+        if (ok) {
+            publishDeleted(existed);
+        }
+        return ok;
+    }
+
+    /**
+     * 通道删除 → 通知上级。
+     *
+     * <p>不发这条事件，上级目录里的通道会永久留着：完整快照是增量 upsert 语义，
+     * 上级不会因为节点「这次没出现」而删除，必须显式推 {@code Event=DEL}。
+     */
+    private void publishDeleted(CascadeChannelDTO existed) {
+        if (existed == null || StringUtils.isBlank(existed.getPlatformId())
+            || StringUtils.isBlank(existed.getCascadeChannelId())) {
+            log.warn("级联通道已删除，但缺少平台/通道编码，无法通知上级删除");
+            return;
+        }
+        eventPublisher.publishEvent(
+            new LocalCascadeCatalogChangeEvent(existed.getPlatformId(), "CHANNEL",
+                existed.getCascadeChannelId(), "DEL"));
     }
 
     public Page<CascadeChannelDTO> getPage(CascadeChannelDTO query, int page, int size) {

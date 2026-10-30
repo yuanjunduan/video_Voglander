@@ -207,6 +207,44 @@ public class CascadeNotifyPublisher {
         }
     }
 
+    /**
+     * 目录节点被删除 → 向所有订阅了 Catalog 的上级发 {@code Event=DEL} 通知。
+     *
+     * <p><b>为什么不能只重推快照</b>：完整目录快照对上级是增量 upsert 语义，海康收到「少了一个节点」
+     * 的完整快照只会更新出现过的节点，不会删除上次同步过、这次没出现的节点——实测两包均 200 OK，
+     * 目录里旧组织仍在。删除必须显式给 {@code <Event>DEL</Event>}。
+     *
+     * <p><b>不查库</b>：删除场景下记录已经落库删掉了，按编码直发才不会漏发（{@link #pushCatalogChange}
+     * 需要先查到通道，DEL 时查不到就直接跳过了）。
+     *
+     * @param platformId 上级平台编码
+     * @param cascadeId  被删节点的上级编码（组织编码 / 级联通道编码）
+     */
+    public void pushCatalogDelete(String platformId, String cascadeId) {
+        if (StringUtils.isBlank(platformId) || StringUtils.isBlank(cascadeId)) {
+            return;
+        }
+        CascadePlatformDTO platform = cascadePlatformManager.getByPlatformId(platformId);
+        if (platform == null) {
+            log.warn("目录删除通知跳过，找不到上级平台配置: platformId={}", platformId);
+            return;
+        }
+        Endpoint ep = endpoint(platform);
+        if (ep == null) {
+            return;
+        }
+        String domainId = catalogAssembler.resolveDomainId(platform, ep.from.getUserId());
+        String sn = String.valueOf(System.currentTimeMillis() % 1_000_000);
+        String eventId = resolveCatalogEventId(platformId, sn);
+        try {
+            String callId = sendIsolated(ep,
+                CascadeManscdpXml.catalogEventNotify(domainId, sn, cascadeId, "DEL"), eventId);
+            log.info("推送目录删除通知: platformId={}, cascadeId={}, callId={}", platformId, cascadeId, callId);
+        } catch (Exception e) {
+            log.error("推送目录删除通知失败: platformId={}, cascadeId={}", platformId, cascadeId, e);
+        }
+    }
+
     /** 告警 → 推送所有订阅了 Alarm 的上级。 */
     public void pushAlarm(String localDeviceId, String localChannelId, String alarmType,
         String alarmPriority, String alarmTime) {

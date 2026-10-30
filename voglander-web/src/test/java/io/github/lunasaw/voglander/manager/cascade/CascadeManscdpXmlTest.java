@@ -122,6 +122,22 @@ class CascadeManscdpXmlTest {
     }
 
     @Test
+    @DisplayName("目录变更：DEL 只带一个节点，Item 里带 Event，SumNum 与 Num 一致")
+    void catalogEventNotify_del() {
+        String xml = CascadeManscdpXml.catalogEventNotify(
+            "34020000002000000001", "123", "34020000002150000002", "DEL");
+
+        assertTrue(xml.startsWith("<?xml version=\"1.0\" encoding=\"GB2312\"?>"), xml);
+        assertTrue(xml.contains("<CmdType>Catalog</CmdType>"), xml);
+        assertTrue(xml.contains("<DeviceID>34020000002000000001</DeviceID>"), xml);
+        assertTrue(xml.contains("<SumNum>1</SumNum>"), xml);
+        assertTrue(xml.contains("<DeviceList Num=\"1\">"), xml);
+        assertTrue(xml.contains("<DeviceID>34020000002150000002</DeviceID>"), xml);
+        assertTrue(xml.contains("<Event>DEL</Event>"), "删除必须带 Event，否则上级只做 upsert: " + xml);
+        assertTrue(xml.endsWith("</Notify>\n"), xml);
+    }
+
+    @Test
     @DisplayName("encode：声明与字节一致，GB2312 中文可回解")
     void encode_gb2312_declarationMatchesBytes() throws Exception {
         String xml = CascadeManscdpXml.broadcastResponse("1", "1", "OK")

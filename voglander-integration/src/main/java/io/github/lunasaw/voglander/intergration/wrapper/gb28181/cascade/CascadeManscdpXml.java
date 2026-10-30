@@ -60,6 +60,34 @@ public final class CascadeManscdpXml {
         return end(xml, "Response");
     }
 
+    /**
+     * 目录变更通知（§9.11）：只带一个节点的 {@code ADD/UPDATE/DEL}。
+     *
+     * <p><b>为什么删除必须单独发</b>：完整目录快照对上级是「增量 upsert」语义——节点出现即新增/更新，
+     * 节点没出现却无法区分「已删除」与「还没推完」，上级一律保留。海康 iSecure Center 实测如此：
+     * 删掉组织后重推快照（SumNum 变小）两包都回 200 OK，目录里旧组织仍在。
+     * 因此删除要显式给 {@code <Event>DEL</Event>}，上级才按删除处理。
+     *
+     * @param domainId 本级域编码（上级按此定位是哪棵目录树）
+     * @param sn       本次通知的 SN
+     * @param deviceId 被删节点的上级编码（组织编码或级联通道编码）
+     * @param event    {@code DEL} / {@code ADD} / {@code UPDATE}
+     */
+    public static String catalogEventNotify(String domainId, String sn, String deviceId, String event) {
+        StringBuilder xml = start("Notify");
+        append(xml, "CmdType", "Catalog");
+        append(xml, "SN", sn);
+        append(xml, "DeviceID", domainId);
+        append(xml, "SumNum", 1);
+        xml.append(INDENT).append("<DeviceList Num=\"1\">").append(LF);
+        xml.append(INDENT).append("<Item>").append(LF);
+        append(xml, "DeviceID", deviceId);
+        append(xml, "Event", event);
+        xml.append(INDENT).append("</Item>").append(LF);
+        xml.append(INDENT).append("</DeviceList>").append(LF);
+        return end(xml, "Notify");
+    }
+
     /** 设备信息应答（A.2.6 f) / §9.5.3.2）。 */
     public static String deviceInfoResponse(DeviceInfoView view) {
         StringBuilder xml = start("Response");
