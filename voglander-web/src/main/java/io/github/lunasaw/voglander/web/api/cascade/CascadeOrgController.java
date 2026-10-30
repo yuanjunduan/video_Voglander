@@ -101,23 +101,27 @@ public class CascadeOrgController {
     @Operation(summary = "查询级联组织详情")
     public AjaxResult<CascadeOrgVO> getById(@PathVariable Long id) {
         CascadeOrgDTO dto = cascadeOrgManager.getById(id);
-        return AjaxResult.success(cascadeWebAssembler.toVO(dto));
+        CascadeOrgVO vo = dto == null ? null : cascadeWebAssembler.toVO(dto,
+            cascadeOrgManager.catalogVisibility(dto.getPlatformId()));
+        return AjaxResult.success(vo);
     }
 
     @GetMapping("/list")
     @Operation(summary = "平铺查询级联组织", description = "按 sortOrder 升序返回，不含 children")
     public AjaxResult<List<CascadeOrgVO>> list(@RequestParam String platformId) {
         List<CascadeOrgDTO> dtos = cascadeOrgManager.listByPlatformId(platformId);
-        return AjaxResult.success(cascadeWebAssembler.toVOList(dtos));
+        return AjaxResult.success(cascadeWebAssembler.toVOList(dtos,
+            cascadeOrgManager.catalogVisibility(platformId)));
     }
 
     @GetMapping("/tree")
     @Operation(summary = "树形查询级联组织",
-        description = "子组织挂在 children 上，并带直属通道数；传 rootOrgId 时只返回该组织的子树，供前端懒加载")
+        description = "子组织挂在 children 上，并带直属通道数与上级可见性；传 rootOrgId 时只返回该组织的子树，供前端懒加载")
     public AjaxResult<List<CascadeOrgVO>> tree(@RequestParam String platformId,
         @RequestParam(required = false) String rootOrgId) {
         List<CascadeOrgDTO> roots = cascadeOrgManager.tree(platformId, rootOrgId);
-        return AjaxResult.success(cascadeWebAssembler.toVOList(roots));
+        return AjaxResult.success(cascadeWebAssembler.toVOList(roots,
+            cascadeOrgManager.catalogVisibility(platformId)));
     }
 
     @GetMapping("/{id}/tree")
@@ -129,7 +133,8 @@ public class CascadeOrgController {
             return AjaxResult.success(List.of());
         }
         List<CascadeOrgDTO> roots = cascadeOrgManager.tree(org.getPlatformId(), org.getCascadeOrgId());
-        return AjaxResult.success(cascadeWebAssembler.toVOList(roots));
+        return AjaxResult.success(cascadeWebAssembler.toVOList(roots,
+            cascadeOrgManager.catalogVisibility(org.getPlatformId())));
     }
 
     @GetMapping("/{id}/descendants")
@@ -142,7 +147,8 @@ public class CascadeOrgController {
             return AjaxResult.success(List.of());
         }
         List<CascadeOrgDTO> dtos = cascadeOrgManager.listSubtree(org.getPlatformId(), org.getCascadeOrgId(), includeSelf);
-        return AjaxResult.success(cascadeWebAssembler.toVOList(dtos));
+        return AjaxResult.success(cascadeWebAssembler.toVOList(dtos,
+            cascadeOrgManager.catalogVisibility(org.getPlatformId())));
     }
 
     /**

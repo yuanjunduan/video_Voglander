@@ -1,6 +1,7 @@
 package io.github.lunasaw.voglander.manager.manager;
 
 import java.util.List;
+import java.util.Objects;
 
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,6 +16,7 @@ import org.springframework.util.Assert;
 import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
 import io.github.lunasaw.voglander.manager.assembler.CascadeAssembler;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
 import io.github.lunasaw.voglander.manager.service.CascadeChannelService;
 import io.github.lunasaw.voglander.repository.entity.CascadeChannelDO;
 import lombok.extern.slf4j.Slf4j;
@@ -140,6 +142,13 @@ public class CascadeChannelManager {
             dto.setCascadeOrgId(orgId);
             orgChanged = !StringUtils.equals(existed.getCascadeOrgId(), orgId);
         }
+        boolean wasEnabled = existed.getEnabled() == null || existed.getEnabled() == 1;
+        boolean nowEnabled = dto.getEnabled() == null ? wasEnabled : dto.getEnabled() == 1;
+        /* 0 -> 1 是「重新上报」：归属组织的整条祖先链都得在报，否则推上去又是一条孤儿；
+           换组织时 normalizeOrgId 已经校验过目标组织，不必重复回表 */
+        if (!wasEnabled && nowEnabled && !orgIdTouched) {
+            assertOrgPublished(platformId, existed.getCascadeOrgId());
+        }
 
         boolean ok = cascadeChannelService.updateById(CascadeAssembler.toDO(dto));
         if (orgIdTouched && dto.getCascadeOrgId() == null) {
@@ -152,8 +161,6 @@ public class CascadeChannelManager {
             return false;
         }
 
-        boolean wasEnabled = existed.getEnabled() == null || existed.getEnabled() == 1;
-        boolean nowEnabled = dto.getEnabled() == null ? wasEnabled : dto.getEnabled() == 1;
         if (wasEnabled && !nowEnabled) {
             /* 删的是上级眼里那个节点，编码变过也要用改之前的 */
             publishEvent(platformId, existed.getCascadeChannelId(), "DEL");
@@ -194,17 +201,15 @@ public class CascadeChannelManager {
     /**
      * 恢复单条通道同步。
      *
-     * <p>所属组织处于停报状态时拒绝：通道的 {@code ParentID} 指向一个上级看不到的组织，
-     * 恢复后只会变成一个挂不上去的孤儿条目。
+     * <p>所属组织（含整条祖先链）不在上报状态时拒绝：通道的 {@code ParentID} 指向一个上级看不到的
+     * 组织，恢复后只会变成一条挂不上去的孤儿条目。只报错不自动恢复上级——一条开关就放出一整棵
+     * 子树，用户对「上级目录一次多出什么」会失去预期。
      */
     public boolean publish(Long id) {
         Assert.notNull(id, "id 不能为空");
         CascadeChannelDTO existed = getById(id);
         Assert.notNull(existed, "级联通道不存在: id=" + id);
-        if (StringUtils.isNotBlank(existed.getCascadeOrgId())) {
-            Assert.isTrue(cascadeOrgManager.isEnabledOrg(existed.getPlatformId(), existed.getCascadeOrgId()),
-                "所属级联组织处于停报状态，请先恢复组织");
-        }
+        assertOrgPublished(existed.getPlatformId(), existed.getCascadeOrgId());
         CascadeChannelDO patch = new CascadeChannelDO();
         patch.setId(id);
         patch.setEnabled(1);
@@ -229,18 +234,39 @@ public class CascadeChannelManager {
     }
 
     /**
-     * 校验并规整组织的归属编码：空白归一为 null（挂平台根节点），非空必须是同平台已启用组织。
+     * 校验并规整组织的归属编码：空白归一为 null（挂平台根节点），非空必须是上级目录里真实可见的组织。
      *
-     * <p>校验放在写入口而非出参组装：脏归属一旦落库，上级侧表现为"通道收得到但不挂在任何组织下"，
-     * 排查时既不像数据错误也不像协议错误，成本很高。
+     * <p>校验放在写入口而非出参组装：脏归属一旦落库，上级侧表现为「通道收得到但不挂在任何组织下」，
+     * 或者被快照直接剪掉（组织取消同步且策略为 CASCADE）——页面显示上报中，上级却一条也看不到。
      */
     private String normalizeOrgId(String platformId, String cascadeOrgId) {
         if (StringUtils.isBlank(cascadeOrgId)) {
             return null;
         }
-        Assert.isTrue(cascadeOrgManager.isEnabledOrg(platformId, cascadeOrgId),
-            "级联组织不存在或已停用: platformId=" + platformId + ", cascadeOrgId=" + cascadeOrgId);
+        assertOrgPublished(platformId, cascadeOrgId);
         return cascadeOrgId;
+    }
+
+    /**
+     * 校验通道归属的组织在上级目录里真实可见（自身与整条祖先链都在报）。
+     *
+     * <p>只看自身 {@code enabled} 不够：组织 A 停报后，子组织 B 的开关仍是 1，
+     * 但 A、B 早已被 DEL 从上级目录删掉，此时把通道推到 B 下只会得到一条挂不上去的孤儿节点。
+     */
+    private void assertOrgPublished(String platformId, String cascadeOrgId) {
+        if (StringUtils.isBlank(cascadeOrgId)) {
+            return;
+        }
+        CascadeOrgDTO org = cascadeOrgManager.getByPlatformAndCode(platformId, cascadeOrgId);
+        Assert.notNull(org, "级联组织不存在: platformId=" + platformId + ", cascadeOrgId=" + cascadeOrgId);
+        CascadeOrgDTO disabled = cascadeOrgManager.findDisabledInChain(platformId, cascadeOrgId);
+        Assert.isNull(disabled, () -> {
+            String name = StringUtils.defaultIfBlank(disabled.getOrgName(), disabled.getCascadeOrgId());
+            /* 停在自己身上和停在上级，用户的下一步动作不一样，报错里分开说 */
+            String hint = Objects.equals(disabled.getId(), org.getId())
+                ? "" : "（该组织本身是上报的，被它的上级连带）";
+            return "级联组织【" + name + "】处于停报状态，请先恢复它" + hint;
+        });
     }
 
     public boolean delete(Long id) {

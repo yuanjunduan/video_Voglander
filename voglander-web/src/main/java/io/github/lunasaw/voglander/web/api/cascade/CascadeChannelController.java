@@ -1,5 +1,6 @@
 package io.github.lunasaw.voglander.web.api.cascade;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -23,6 +24,8 @@ import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeC
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeChannelMetaResolver;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadeChannelManager;
+import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
+import io.github.lunasaw.voglander.manager.manager.CatalogVisibility;
 import io.github.lunasaw.voglander.manager.manager.DeviceChannelManager;
 import io.github.lunasaw.voglander.web.api.cascade.assembler.CascadeWebAssembler;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelBatchBindReq;
@@ -57,6 +60,9 @@ public class CascadeChannelController {
 
     @Autowired
     private CascadeChannelMetaResolver channelMetaResolver;
+
+    @Autowired
+    private CascadeOrgManager           cascadeOrgManager;
 
     @PostMapping
     @Operation(summary = "新增级联通道映射")
@@ -115,7 +121,8 @@ public class CascadeChannelController {
         CascadeChannelDTO dto = cascadeChannelManager.getById(id);
         Map<String, CascadeChannelMeta> metaMap = dto == null
             ? Map.of() : channelMetaResolver.resolve(List.of(dto));
-        return AjaxResult.success(toVO(dto, metaMap));
+        CatalogVisibility visibility = dto == null ? null : cascadeOrgManager.catalogVisibility(dto.getPlatformId());
+        return AjaxResult.success(toVO(dto, metaMap, visibility));
     }
 
     @PostMapping("/getPage")
@@ -132,8 +139,11 @@ public class CascadeChannelController {
         List<CascadeChannelDTO> records = dtoPage.getRecords();
         /* 五项目录元数据要显示“上级实际会收到什么”，因此按覆盖值+设备派生一次性合成，不展出库里的裸值 */
         Map<String, CascadeChannelMeta> metaMap = channelMetaResolver.resolve(records);
+        /* 可见性按平台缓存：分页可能跨平台，但同一个平台只算一次 */
+        Map<String, CatalogVisibility> visibilityByPlatform = new HashMap<>();
         List<CascadeChannelVO> items = records.stream()
-            .map(dto -> toVO(dto, metaMap))
+            .map(dto -> toVO(dto, metaMap, visibilityByPlatform.computeIfAbsent(
+                dto.getPlatformId(), cascadeOrgManager::catalogVisibility)))
             .collect(Collectors.toList());
 
         CascadeChannelListResp resp = new CascadeChannelListResp();
@@ -143,14 +153,23 @@ public class CascadeChannelController {
     }
 
     /**
-     * DTO → VO，并用解析结果覆盖五项目录元数据。
+     * DTO → VO，并用解析结果覆盖五项目录元数据，同时补齐上级目录可见性。
      *
-     * <p>直接展示库里的值会误导人：留空表示“自动派生”，页面必须看到派生后的真值。
+     * <p>直接展示库里的值会误导人：留空表示“自动派生”，页面必须看到派生后的真值；
+     * 同理只看 {@code enabled} 会把「组织停报连带」的通道误显示成上报中。
      */
-    private CascadeChannelVO toVO(CascadeChannelDTO dto, Map<String, CascadeChannelMeta> metaMap) {
+    private CascadeChannelVO toVO(CascadeChannelDTO dto, Map<String, CascadeChannelMeta> metaMap,
+        CatalogVisibility visibility) {
         CascadeChannelVO vo = CascadeChannelVO.convertVO(dto);
         if (vo == null) {
             return null;
+        }
+        if (visibility != null) {
+            boolean selfEnabled = dto.getEnabled() != null && dto.getEnabled() == 1;
+            boolean orgVisible = visibility.isChannelVisible(dto.getCascadeOrgId());
+            vo.setEffective(selfEnabled && orgVisible);
+            /* 自身开关关掉不是组织的锅，不归到「被上级组织连带」里 */
+            vo.setBlockedByOrgName(orgVisible ? null : visibility.blockedOrgName(dto.getCascadeOrgId()));
         }
         CascadeChannelMeta meta = metaMap.get(
             DeviceChannelManager.channelKey(dto.getLocalDeviceId(), dto.getLocalChannelId()));

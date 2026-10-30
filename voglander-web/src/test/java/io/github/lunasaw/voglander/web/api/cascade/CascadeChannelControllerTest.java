@@ -22,6 +22,8 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeChannelMetaResolver;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadeChannelManager;
+import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
+import io.github.lunasaw.voglander.manager.manager.CatalogVisibility;
 import io.github.lunasaw.voglander.web.api.cascade.assembler.CascadeWebAssembler;
 
 /**
@@ -39,6 +41,10 @@ class CascadeChannelControllerTest {
     CascadeChannelManager   cascadeChannelManager;
     @Mock
     CascadeChannelMetaResolver channelMetaResolver;
+    @Mock
+    CascadeOrgManager     cascadeOrgManager;
+    @Mock
+    CatalogVisibility     catalogVisibility;
     @Spy
     CascadeWebAssembler     cascadeWebAssembler = new CascadeWebAssembler();
 
@@ -48,6 +54,9 @@ class CascadeChannelControllerTest {
     void setup() {
         /* 旧用例不断言派生字段，留空即走兜底值，避免把派生规则重复写进控制器测试 */
         lenient().when(channelMetaResolver.resolve(any())).thenReturn(java.util.Map.of());
+        /* 可见性快照需要整平台数据才能算，控制器只负责填：这里给个全可见的条，避免用例依赖组织数据 */
+        lenient().when(cascadeOrgManager.catalogVisibility(any())).thenReturn(catalogVisibility);
+        lenient().when(catalogVisibility.isChannelVisible(any())).thenReturn(true);
         mvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 
@@ -94,6 +103,25 @@ class CascadeChannelControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.data.id").value(7));
         verify(cascadeChannelManager).getById(7L);
+    }
+
+    @Test
+    @DisplayName("详情：所属组织停报时 effective=false 且回填停报来源")
+    void getById_marks_invisible_when_org_revoked() throws Exception {
+        CascadeChannelDTO dto = new CascadeChannelDTO();
+        dto.setId(7L);
+        dto.setPlatformId("p1");
+        dto.setEnabled(1);
+        dto.setCascadeOrgId("34020000002150000002");
+        when(cascadeChannelManager.getById(7L)).thenReturn(dto);
+        when(catalogVisibility.isChannelVisible("34020000002150000002")).thenReturn(false);
+        when(catalogVisibility.blockedOrgName("34020000002150000002")).thenReturn("一层");
+
+        mvc.perform(get("/api/v1/cascade/channel/7"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.enabled").value(1))
+            .andExpect(jsonPath("$.data.effective").value(false))
+            .andExpect(jsonPath("$.data.blockedByOrgName").value("一层"));
     }
 
     @Test

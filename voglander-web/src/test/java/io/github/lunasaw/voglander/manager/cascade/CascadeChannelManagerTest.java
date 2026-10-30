@@ -11,7 +11,9 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 
 import io.github.lunasaw.voglander.BaseTest;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadeChannelManager;
+import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
 import io.github.lunasaw.voglander.support.UniqueKeyFactory;
 
 /**
@@ -22,6 +24,17 @@ class CascadeChannelManagerTest extends BaseTest {
 
     @Autowired
     private CascadeChannelManager cascadeChannelManager;
+
+    @Autowired
+    private CascadeOrgManager cascadeOrgManager;
+
+    private CascadeOrgDTO org(String platformId, Long parentOrgId, String name) {
+        CascadeOrgDTO dto = new CascadeOrgDTO();
+        dto.setPlatformId(platformId);
+        dto.setParentOrgId(parentOrgId);
+        dto.setOrgName(name);
+        return dto;
+    }
 
     private CascadeChannelDTO buildDto(String platformId, String localChannelId) {
         CascadeChannelDTO dto = new CascadeChannelDTO();
@@ -137,6 +150,102 @@ class CascadeChannelManagerTest extends BaseTest {
 
             assertNotNull(cascadeChannelManager.getByPlatformAndChannel(platformId, channelId));
             assertEquals(0, cascadeChannelManager.getById(id).getEnabled());
+        }
+    }
+
+    @Nested
+    @DisplayName("组织停报 - 通道上报前必须确认所属组织在上级可见")
+    class OrgGate {
+
+        /** 一层根组织 → 二层子组织，返回 [rootId, childId] */
+        private Long[] twoLevelOrg(String platformId) {
+            Long rootId = cascadeOrgManager.add(org(platformId, null, "一层"));
+            Long childId = cascadeOrgManager.add(org(platformId, rootId, "二层"));
+            return new Long[] {rootId, childId};
+        }
+
+        @Test
+        @DisplayName("组织自身停报时拒绝恢复上报，记录保持停报")
+        void publish_should_reject_when_org_revoked() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long orgId = cascadeOrgManager.add(org(platformId, null, "一层"));
+
+            CascadeChannelDTO dto = buildDto(platformId, UniqueKeyFactory.channelId());
+            dto.setCascadeOrgId(cascadeOrgManager.getById(orgId).getCascadeOrgId());
+            Long channelId = cascadeChannelManager.add(dto);
+            cascadeChannelManager.revoke(channelId);
+            cascadeOrgManager.revoke(orgId, null);
+
+            assertThrows(IllegalArgumentException.class, () -> cascadeChannelManager.publish(channelId));
+            assertEquals(0, cascadeChannelManager.getById(channelId).getEnabled(),
+                "被拒绝的恢复不能悄悄把开关改成上报");
+        }
+
+        @Test
+        @DisplayName("上级组织停报时同样拒绝：子组织开关仍是 1，但在上级目录已被剪掉")
+        void publish_should_reject_when_ancestor_revoked() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long[] orgs = twoLevelOrg(platformId);
+            String childCode = cascadeOrgManager.getById(orgs[1]).getCascadeOrgId();
+
+            CascadeChannelDTO dto = buildDto(platformId, UniqueKeyFactory.channelId());
+            dto.setCascadeOrgId(childCode);
+            Long channelId = cascadeChannelManager.add(dto);
+            cascadeChannelManager.revoke(channelId);
+            cascadeOrgManager.revoke(orgs[0], null);
+
+            assertEquals(1, cascadeOrgManager.getById(orgs[1]).getEnabled(), "前提：子组织自身开关还是上报");
+            assertThrows(IllegalArgumentException.class, () -> cascadeChannelManager.publish(channelId));
+            assertEquals(0, cascadeChannelManager.getById(channelId).getEnabled());
+        }
+
+        @Test
+        @DisplayName("update 把 enabled 从 0 改回 1 走同一条校验")
+        void update_should_reject_restore_when_ancestor_revoked() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long[] orgs = twoLevelOrg(platformId);
+
+            CascadeChannelDTO dto = buildDto(platformId, UniqueKeyFactory.channelId());
+            dto.setCascadeOrgId(cascadeOrgManager.getById(orgs[1]).getCascadeOrgId());
+            Long channelId = cascadeChannelManager.add(dto);
+            cascadeChannelManager.revoke(channelId);
+            cascadeOrgManager.revoke(orgs[0], null);
+
+            CascadeChannelDTO patch = new CascadeChannelDTO();
+            patch.setId(channelId);
+            patch.setEnabled(1);
+            assertThrows(IllegalArgumentException.class, () -> cascadeChannelManager.update(patch));
+            assertEquals(0, cascadeChannelManager.getById(channelId).getEnabled());
+        }
+
+        @Test
+        @DisplayName("新增通道绑定到链上停报的组织时拒绝")
+        void add_should_reject_channel_bound_to_revoked_org() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long[] orgs = twoLevelOrg(platformId);
+            cascadeOrgManager.revoke(orgs[0], null);
+
+            CascadeChannelDTO dto = buildDto(platformId, UniqueKeyFactory.channelId());
+            dto.setCascadeOrgId(cascadeOrgManager.getById(orgs[1]).getCascadeOrgId());
+
+            assertThrows(IllegalArgumentException.class, () -> cascadeChannelManager.add(dto));
+            assertNull(cascadeChannelManager.getByPlatformAndChannel(platformId, dto.getLocalChannelId()),
+                "拒绝后不能留下半条记录");
+        }
+
+        @Test
+        @DisplayName("整条链都在报时绑定与恢复都放行")
+        void should_allow_when_chain_published() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long[] orgs = twoLevelOrg(platformId);
+
+            CascadeChannelDTO dto = buildDto(platformId, UniqueKeyFactory.channelId());
+            dto.setCascadeOrgId(cascadeOrgManager.getById(orgs[1]).getCascadeOrgId());
+            Long channelId = cascadeChannelManager.add(dto);
+            cascadeChannelManager.revoke(channelId);
+
+            assertTrue(cascadeChannelManager.publish(channelId));
+            assertEquals(1, cascadeChannelManager.getById(channelId).getEnabled());
         }
     }
 

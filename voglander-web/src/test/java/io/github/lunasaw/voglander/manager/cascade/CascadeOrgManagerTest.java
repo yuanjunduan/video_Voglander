@@ -109,6 +109,20 @@ class CascadeOrgManagerTest extends BaseTest {
             assertThrows(IllegalArgumentException.class,
                 () -> cascadeOrgManager.add(org(UniqueKeyFactory.deviceId(), rootId, "二层")));
         }
+
+        @Test
+        @DisplayName("父组织停报时新组织落成停报，避免显示上报中却上级看不见")
+        void should_persist_as_revoked_under_revoked_parent() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long rootId = cascadeOrgManager.add(org(platformId, null, "一层"));
+            cascadeOrgManager.revoke(rootId, null);
+
+            Long childId = cascadeOrgManager.add(org(platformId, rootId, "二层"));
+
+            assertEquals(0, cascadeOrgManager.getById(childId).getEnabled(),
+                "父链停报，新组织不能是上报状态");
+            assertTrue(cascadeOrgManager.listEffective(platformId).isEmpty(), "整棵子树都不该进入上级目录");
+        }
     }
 
     @Nested
@@ -247,6 +261,27 @@ class CascadeOrgManagerTest extends BaseTest {
             assertEquals(1, effective.size());
             assertEquals(rootId, effective.get(0).getId());
         }
+
+        @Test
+        @DisplayName("isEffectivelyEnabled 看整条祖先链，findDisabledInChain 指出停在哪个组织")
+        void should_resolve_effective_by_ancestors() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long rootId = cascadeOrgManager.add(org(platformId, null, "一层"));
+            Long midId = cascadeOrgManager.add(org(platformId, rootId, "二层"));
+            Long leafId = cascadeOrgManager.add(org(platformId, midId, "三层"));
+            String leafCode = cascadeOrgManager.getById(leafId).getCascadeOrgId();
+            assertTrue(cascadeOrgManager.isEffectivelyEnabled(platformId, leafCode), "整条链都在报");
+            assertNull(cascadeOrgManager.findDisabledInChain(platformId, leafCode));
+
+            cascadeOrgManager.revoke(midId, null);
+
+            assertTrue(cascadeOrgManager.isEnabledOrg(platformId, leafCode), "自身开关仍是开着");
+            assertFalse(cascadeOrgManager.isEffectivelyEnabled(platformId, leafCode), "但祖先停报后上级看不到");
+            assertEquals(midId, cascadeOrgManager.findDisabledInChain(platformId, leafCode).getId(),
+                "要指出停在中间那层，而不是笼统说不可见");
+            assertFalse(cascadeOrgManager.isEffectivelyEnabled(platformId, "34020000002159999999"),
+                "组织不存在一律按不可见处理");
+        }
     }
 
     @Nested
@@ -354,6 +389,40 @@ class CascadeOrgManagerTest extends BaseTest {
 
             assertEquals(1, cascadeOrgManager.getById(ids[0]).getEnabled());
             assertEquals(3, cascadeOrgManager.listEffective(platformId).size(), "整棵子树一起回来");
+        }
+
+        @Test
+        @DisplayName("编辑接口把 enabled 改回 1 时同样要求父及所有上级在报")
+        void update_should_reject_restore_when_ancestor_revoked() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long rootId = cascadeOrgManager.add(org(platformId, null, "一层"));
+            Long childId = cascadeOrgManager.add(org(platformId, rootId, "二层"));
+            cascadeOrgManager.revoke(childId, null);
+            cascadeOrgManager.revoke(rootId, null);
+
+            CascadeOrgDTO patch = new CascadeOrgDTO();
+            patch.setId(childId);
+            patch.setEnabled(1);
+
+            assertThrows(IllegalArgumentException.class, () -> cascadeOrgManager.update(patch),
+                "绕过 publish() 直接改字段也必须被拦下");
+            assertEquals(0, cascadeOrgManager.getById(childId).getEnabled(), "被拒绝时不能留下改动");
+        }
+
+        @Test
+        @DisplayName("祖先都在报时编辑接口可以恢复上报")
+        void update_should_allow_restore_when_ancestors_published() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long rootId = cascadeOrgManager.add(org(platformId, null, "一层"));
+            Long childId = cascadeOrgManager.add(org(platformId, rootId, "二层"));
+            cascadeOrgManager.revoke(childId, null);
+
+            CascadeOrgDTO patch = new CascadeOrgDTO();
+            patch.setId(childId);
+            patch.setEnabled(1);
+
+            assertTrue(cascadeOrgManager.update(patch));
+            assertEquals(1, cascadeOrgManager.getById(childId).getEnabled());
         }
     }
 

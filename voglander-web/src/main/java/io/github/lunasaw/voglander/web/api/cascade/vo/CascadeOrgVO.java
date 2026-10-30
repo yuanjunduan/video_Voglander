@@ -68,6 +68,21 @@ public class CascadeOrgVO implements Serializable {
     private Integer           enabled;
 
     /**
+     * 上级目录里是否真的能看到这个节点：自身与整条祖先链都在上报。
+     *
+     * <p>与 {@code enabled} 不是一回事：祖先停报后子孙的开关仍是 1，
+     * 但它们早已随祖先被 DEL 从上级目录删掉。页面只看 {@code enabled} 就会
+     * 「显示上报中、上级其实看不到」。
+     */
+    private Boolean           effective;
+
+    /**
+     * 被哪一级组织连带停报：自身停报就是自己的名称，否则是链上那级祖先；
+     * 生效时为 null。前端用它把「上级不可见」的原因说清楚。
+     */
+    private String            blockedByOrgName;
+
+    /**
      * 取消同步时其下通道的处置策略：CASCADE / REROUTE。
      *
      * <p>取消同步弹窗需要回显上次的选择，避免用户每次都重选。

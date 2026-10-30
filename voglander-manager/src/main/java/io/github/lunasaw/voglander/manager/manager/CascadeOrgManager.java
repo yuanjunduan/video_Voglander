@@ -90,7 +90,7 @@ public class CascadeOrgManager {
         Assert.notNull(dto, "dto 不能为空");
         Assert.hasText(dto.getPlatformId(), "platformId 不能为空");
         Assert.hasText(dto.getOrgName(), "orgName 不能为空");
-        assertParentExists(dto.getPlatformId(), dto.getParentOrgId());
+        CascadeOrgDTO parent = assertParentExists(dto.getPlatformId(), dto.getParentOrgId());
 
         /* 编码一律由后端生成：手填容易出现重复、类型位错误或与平台前缀不一致，上级判为非法节点 */
         dto.setCascadeOrgId(nextOrgCode(dto.getPlatformId()));
@@ -99,15 +99,25 @@ public class CascadeOrgManager {
         if (dto.getEnabled() == null) {
             dto.setEnabled(1);
         }
+        /* 父链停报时新组织跟着落成停报：否则页面显示「上报中」，上级目录里却因祖先被剪掉而看不到它 */
+        if (dto.getEnabled() != 0 && parent != null
+            && !isEffectivelyEnabled(dto.getPlatformId(), parent.getCascadeOrgId())) {
+            dto.setEnabled(0);
+            log.info("父组织链路处于停报状态，新增组织按停报落库: platformId={}, parentOrgId={}, parentCode={}",
+                dto.getPlatformId(), dto.getParentOrgId(), parent.getCascadeOrgId());
+        }
         if (dto.getSortOrder() == null) {
             dto.setSortOrder(0);
         }
         dto.setRevokePolicy(RevokePolicy.normalize(dto.getRevokePolicy()));
         CascadeOrgDO doObj = CascadeAssembler.toDO(dto);
         cascadeOrgService.save(doObj);
-        log.info("新增级联组织: platformId={}, orgName={}, cascadeOrgId={}, parentOrgId={}",
-            dto.getPlatformId(), dto.getOrgName(), dto.getCascadeOrgId(), dto.getParentOrgId());
-        publishCatalogChange(dto.getPlatformId(), dto.getCascadeOrgId(), "ADD");
+        log.info("新增级联组织: platformId={}, orgName={}, cascadeOrgId={}, parentOrgId={}, enabled={}",
+            dto.getPlatformId(), dto.getOrgName(), dto.getCascadeOrgId(), dto.getParentOrgId(), dto.getEnabled());
+        /* 停报的组织上级本来就看不到，推 ADD 只会让事件桥白跑一次快照 */
+        if (dto.getEnabled() != null && dto.getEnabled() == 1) {
+            publishCatalogChange(dto.getPlatformId(), dto.getCascadeOrgId(), "ADD");
+        }
         return doObj.getId();
     }
 
@@ -138,14 +148,18 @@ public class CascadeOrgManager {
         if (StringUtils.isNotBlank(dto.getRevokePolicy())) {
             update.setRevokePolicy(RevokePolicy.normalize(dto.getRevokePolicy()));
         }
+        boolean wasEnabled = existed.getEnabled() == null || existed.getEnabled() == 1;
+        boolean nowEnabled = update.getEnabled() == null || update.getEnabled() == 1;
+        /* 0 -> 1 是「重新上报」：父及所有上级必须都在报，否则写进去只是一棵挂不上去的子树 */
+        if (!wasEnabled && nowEnabled) {
+            assertAncestorsEnabled(existed);
+        }
         boolean ok = cascadeOrgService.updateById(update);
         log.info("更新级联组织: id={}, cascadeOrgId={}, orgName={}, enabled={}",
             dto.getId(), existed.getCascadeOrgId(), update.getOrgName(), update.getEnabled());
 
         /* 改名只影响节点自身，但改启停会连带整棵子树进出目录，两条链路完全不同 */
         if (ok) {
-            boolean wasEnabled = existed.getEnabled() == null || existed.getEnabled() == 1;
-            boolean nowEnabled = update.getEnabled() == null || update.getEnabled() == 1;
             if (wasEnabled && !nowEnabled) {
                 publishRevoke(existed, update.getRevokePolicy());
             } else {
@@ -328,14 +342,8 @@ public class CascadeOrgManager {
     public boolean publish(Long id) {
         CascadeOrgDTO org = getById(id);
         Assert.notNull(org, "组织不存在: id=" + id);
-
         /* 祖先是停报状态时坚持恢复只会得到一棵挂不上去的子树，必须在入口拦下 */
-        if (org.getParentOrgId() != null) {
-            CascadeOrgDTO parent = getById(org.getParentOrgId());
-            Assert.isTrue(parent == null || isEffectivelyEnabled(parent, indexById(listByPlatformId(org.getPlatformId()))),
-                "上级组织【" + (parent == null ? org.getParentOrgId() : parent.getOrgName())
-                    + "】处于停报状态，请先恢复它");
-        }
+        assertAncestorsEnabled(org);
 
         CascadeOrgDO patch = new CascadeOrgDO();
         patch.setId(id);
@@ -672,7 +680,88 @@ public class CascadeOrgManager {
             .collect(Collectors.toMap(CascadeOrgDTO::getId, o -> o, (a, b) -> a));
     }
 
-    /** 组织编码是否存在且启用（通道绑定组织时的校验入口）。 */
+    /**
+     * 组织在上级目录里是否<b>真的可见</b>：自身与整条祖先链都是上报状态。
+     *
+     * <p>{@link #isEnabledOrg} 只看自身开关，回答的是「这个组织自己配了没配」；
+     * 凡是会真的往上级发报文的地方（通道上报、组织恢复）都必须用本方法：
+     * 祖先停报后它的子孙早已被 DEL 删掉，此时再发 ADD 只会得到挂不上去的孤儿节点。
+     *
+     * @return 编码为空、组织不存在或链上有停报节点时返回 false
+     */
+    public boolean isEffectivelyEnabled(String platformId, String cascadeOrgId) {
+        if (StringUtils.isBlank(platformId) || StringUtils.isBlank(cascadeOrgId)) {
+            return false;
+        }
+        List<CascadeOrgDTO> all = listByPlatformId(platformId);
+        CascadeOrgDTO org = findByCode(all, cascadeOrgId);
+        return org != null && firstDisabled(org, indexById(all)) == null;
+    }
+
+    /**
+     * 组织链上第一个停报的节点（含自身），用于把「为什么上级看不到」说清楚。
+     *
+     * @return 停报节点；组织不存在或整条链都在报返回 null
+     */
+    public CascadeOrgDTO findDisabledInChain(String platformId, String cascadeOrgId) {
+        if (StringUtils.isBlank(platformId) || StringUtils.isBlank(cascadeOrgId)) {
+            return null;
+        }
+        List<CascadeOrgDTO> all = listByPlatformId(platformId);
+        CascadeOrgDTO org = findByCode(all, cascadeOrgId);
+        return org == null ? null : firstDisabled(org, indexById(all));
+    }
+
+    /**
+     * 平台内的目录可见性快照：组织是否生效、被哪一级停报连带、通道是否仍会出现在上级目录。
+     *
+     * <p>整平台只查一次库，供列表出参填充，避免逐行回表；判定口径必须与
+     * {@code CascadeCatalogAssembler} 组装快照时一致，否则「页面显示的」和
+     * 「上级收到的」会长期漂移。
+     */
+    public CatalogVisibility catalogVisibility(String platformId) {
+        List<CascadeOrgDTO> all = listByPlatformId(platformId);
+        Map<Long, CascadeOrgDTO> byId = indexById(all);
+        Map<String, CascadeOrgDTO> orgByCode = new LinkedHashMap<>();
+        Map<String, String> blockedByOrgName = new LinkedHashMap<>();
+        Set<String> effectiveCodes = new HashSet<>();
+        for (CascadeOrgDTO org : all) {
+            String code = org.getCascadeOrgId();
+            if (StringUtils.isBlank(code)) {
+                continue;
+            }
+            orgByCode.put(code, org);
+            CascadeOrgDTO disabled = firstDisabled(org, byId);
+            if (disabled == null) {
+                effectiveCodes.add(code);
+            } else {
+                blockedByOrgName.put(code, orgLabel(disabled));
+            }
+        }
+        return new CatalogVisibility(orgByCode, blockedByOrgName, effectiveCodes);
+    }
+
+    /** 生效组织编码集合：自身与整条祖先链都在报，可用于按生效范围过滤其它数据。 */
+    public Set<String> listEffectiveCodes(String platformId) {
+        return catalogVisibility(platformId).effectiveCodes();
+    }
+
+    /** 从平铺列表里按编码取组织，避免逐个回表。 */
+    private CascadeOrgDTO findByCode(List<CascadeOrgDTO> all, String cascadeOrgId) {
+        for (CascadeOrgDTO org : all) {
+            if (cascadeOrgId.equals(org.getCascadeOrgId())) {
+                return org;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 组织编码是否存在且<b>自身</b>启用。
+     *
+     * <p>只回答「这个组织自己的开关开着没」，不看祖先链——要判断上级能不能看到，
+     * 用 {@link #isEffectivelyEnabled}。
+     */
     public boolean isEnabledOrg(String platformId, String cascadeOrgId) {
         if (StringUtils.isBlank(platformId) || StringUtils.isBlank(cascadeOrgId)) {
             return false;
@@ -816,34 +905,71 @@ public class CascadeOrgManager {
         publish.run();
     }
 
-    private void assertParentExists(String platformId, Long parentOrgId) {
+    private CascadeOrgDTO assertParentExists(String platformId, Long parentOrgId) {
         if (parentOrgId == null) {
-            return;
+            return null;
         }
         CascadeOrgDTO parent = getById(parentOrgId);
         Assert.notNull(parent, "父组织不存在: id=" + parentOrgId);
         Assert.isTrue(Objects.equals(parent.getPlatformId(), platformId), "父组织不属于该上级平台");
+        return parent;
+    }
+
+    /**
+     * 校验组织能否重新上报：父及所有上级都必须在上报状态。
+     *
+     * <p>只校验父链不校验自身——调用方就是那个「要打开」的节点。
+     * 父记录缺失（历史脏数据）时放行并告警：上级会把它挂到域节点上，不会产生孤儿。
+     */
+    private void assertAncestorsEnabled(CascadeOrgDTO org) {
+        if (org == null || org.getParentOrgId() == null) {
+            return;
+        }
+        Map<Long, CascadeOrgDTO> byId = indexById(listByPlatformId(org.getPlatformId()));
+        CascadeOrgDTO parent = byId.get(org.getParentOrgId());
+        if (parent == null) {
+            log.warn("组织父节点记录缺失，按挂平台根节点恢复: id={}, parentOrgId={}",
+                org.getId(), org.getParentOrgId());
+            return;
+        }
+        CascadeOrgDTO disabled = firstDisabled(parent, byId);
+        Assert.isNull(disabled, () -> "上级组织【" + orgLabel(disabled) + "】处于停报状态，请先恢复它");
+    }
+
+    /** 组织展示名：名称为空时回落编码，报错与日志都用它，避免出现「【null】」 */
+    private String orgLabel(CascadeOrgDTO org) {
+        return org == null ? "" : StringUtils.defaultIfBlank(org.getOrgName(), org.getCascadeOrgId());
     }
 
     private boolean isEffectivelyEnabled(CascadeOrgDTO org, Map<Long, CascadeOrgDTO> byId) {
+        return firstDisabled(org, byId) == null;
+    }
+
+    /**
+     * 自下向上找组织链上第一个停报的节点（含自身）。
+     *
+     * @param byId 同平台组织索引（id → dto）
+     * @return 停报的节点；整条链都在报返回 null
+     */
+    private CascadeOrgDTO firstDisabled(CascadeOrgDTO org, Map<Long, CascadeOrgDTO> byId) {
         Set<Long> guard = new HashSet<>();
         CascadeOrgDTO cur = org;
         while (cur != null) {
             if (cur.getEnabled() == null || cur.getEnabled() != 1) {
-                return false;
+                return cur;
             }
             Long parentId = cur.getParentOrgId();
             if (parentId == null) {
-                return true;
+                return null;
             }
             if (!guard.add(parentId)) {
                 /* 环形数据（人为改库造成）不能死循环，按"不生效"处理 */
                 log.warn("级联组织存在环形父子关系，按停用处理: orgId={}", org.getId());
-                return false;
+                return cur;
             }
             cur = byId.get(parentId);
         }
-        return true;
+        return null;
     }
 
     private long countChannelsByOrg(String platformId, String cascadeOrgId) {

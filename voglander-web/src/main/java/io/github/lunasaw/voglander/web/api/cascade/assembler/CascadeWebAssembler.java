@@ -7,6 +7,7 @@ import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeRevokePreviewDTO;
+import io.github.lunasaw.voglander.manager.manager.CatalogVisibility;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelBatchBindReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelCreateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelPageReq;
@@ -209,6 +210,19 @@ public class CascadeWebAssembler {
      * @param dto 组织 DTO；入参为空返回 null
      */
     public CascadeOrgVO toVO(CascadeOrgDTO dto) {
+        return toVO(dto, null);
+    }
+
+    /**
+     * 组织 DTO → VO，附带上级目录可见性（{@code effective} / {@code blockedByOrgName}）。
+     *
+     * <p>可见性由整平台的快照算出，必须与列表同源：只看 {@code enabled} 会把
+     * 「被祖先连带停报」的节点误显示成上报中。
+     *
+     * @param dto        组织 DTO；入参为空返回 null
+     * @param visibility 平台可见性快照；为空时不做可见性填充
+     */
+    public CascadeOrgVO toVO(CascadeOrgDTO dto, CatalogVisibility visibility) {
         if (dto == null) {
             return null;
         }
@@ -223,12 +237,16 @@ public class CascadeWebAssembler {
         vo.setOrgName(dto.getOrgName());
         vo.setSortOrder(dto.getSortOrder());
         vo.setEnabled(dto.getEnabled());
+        if (visibility != null) {
+            vo.setEffective(visibility.isOrgEffective(dto.getCascadeOrgId()));
+            vo.setBlockedByOrgName(visibility.blockedOrgName(dto.getCascadeOrgId()));
+        }
         vo.setRevokePolicy(dto.getRevokePolicy());
         vo.setChannelCount(dto.getChannelCount());
         if (dto.getChildren() != null) {
             List<CascadeOrgVO> children = new ArrayList<>(dto.getChildren().size());
             for (CascadeOrgDTO child : dto.getChildren()) {
-                children.add(toVO(child));
+                children.add(toVO(child, visibility));
             }
             vo.setChildren(children);
         }
@@ -239,12 +257,19 @@ public class CascadeWebAssembler {
      * 组织 DTO 列表 → VO 列表。
      */
     public List<CascadeOrgVO> toVOList(List<CascadeOrgDTO> dtos) {
+        return toVOList(dtos, null);
+    }
+
+    /**
+     * 组织 DTO 列表 → VO 列表，附带上级目录可见性。
+     */
+    public List<CascadeOrgVO> toVOList(List<CascadeOrgDTO> dtos, CatalogVisibility visibility) {
         List<CascadeOrgVO> list = new ArrayList<>();
         if (dtos == null) {
             return list;
         }
         for (CascadeOrgDTO dto : dtos) {
-            list.add(toVO(dto));
+            list.add(toVO(dto, visibility));
         }
         return list;
     }

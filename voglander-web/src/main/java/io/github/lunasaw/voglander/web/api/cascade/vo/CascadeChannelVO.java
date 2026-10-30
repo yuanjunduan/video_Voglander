@@ -64,6 +64,20 @@ public class CascadeChannelVO implements Serializable {
     private Integer enabled;
 
     /**
+     * 上级目录里是否真的能看到这条通道：自身开启，且（不挂组织，或所属组织链路全在报，
+     * 或组织停报但策略为 REROUTE 上浮到域节点）。
+     *
+     * <p>与 {@code enabled} 不是一回事：组织被取消同步后，通道自己的开关仍是 1，
+     * 但上级目录里早就没了。
+     */
+    private Boolean effective;
+
+    /**
+     * 让这条通道在上级目录消失的那一级组织名称；可见时为 null。
+     */
+    private String  blockedByOrgName;
+
+    /**
      * 以下五项是<b>最终上报值</b>（非单纯库值）：覆盖值优先，留空则由设备通道数据派生。
      * 页面展示它才能核对上级将看到的目录内容。
      */
