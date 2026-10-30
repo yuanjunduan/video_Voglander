@@ -1,5 +1,9 @@
 package io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
@@ -9,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import lombok.extern.slf4j.Slf4j;
 import io.github.lunasaw.voglander.common.anno.TechnicalScheduler;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeRuntimeSnapshotDTO;
 
 /**
  * 出站推送的送达确认与一次性重发。
@@ -108,5 +113,21 @@ public class CascadeNotifyAckTracker {
 
     /** 待确认的推送条目。 */
     private record Pending(String platformId, String desc, Supplier<String> retry, boolean retried, long sentAt) {
+    }
+
+    /**
+     * 导出等待确认的推送（只读投影，供运行状态页展示）。
+     *
+     * @return 按发出时间正序的条目（最早发出、最可能出问题的排前面）
+     */
+    public List<CascadeRuntimeSnapshotDTO.PendingNotify> snapshotPending() {
+        List<CascadeRuntimeSnapshotDTO.PendingNotify> list = new ArrayList<>(pending.size());
+        for (Map.Entry<String, Pending> entry : pending.entrySet()) {
+            Pending item = entry.getValue();
+            list.add(new CascadeRuntimeSnapshotDTO.PendingNotify(entry.getKey(), item.platformId(), item.desc(),
+                item.sentAt(), item.retried()));
+        }
+        list.sort(Comparator.comparingLong(CascadeRuntimeSnapshotDTO.PendingNotify::sentAt));
+        return list;
     }
 }

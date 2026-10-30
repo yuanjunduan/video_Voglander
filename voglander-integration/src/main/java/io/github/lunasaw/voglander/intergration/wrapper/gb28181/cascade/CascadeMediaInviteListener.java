@@ -17,6 +17,7 @@ import io.github.lunasaw.voglander.common.anno.TechnicalScheduler;
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.server.command.media.VoglanderServerMediaCommand;
 import io.github.lunasaw.voglander.intergration.wrapper.zlm.config.ZlmIntegrationConfig;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeRuntimeSnapshotDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadeChannelManager;
 import io.github.lunasaw.zlm.api.ZlmRestService;
 import io.github.lunasaw.zlm.entity.MediaOnlineStatus;
@@ -44,7 +45,9 @@ import javax.sip.SipProvider;
 import javax.sip.message.Request;
 import javax.sip.message.Response;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -495,6 +498,30 @@ public class CascadeMediaInviteListener {
             .filter(s -> userId.equals(s.upperUserId))
             .findFirst()
             .orElse(null);
+    }
+
+    /**
+     * 导出全部媒体会话（只读投影，供运行状态页展示）。
+     *
+     * <p>把两张表合成一个列表、用 {@code phase} 区分：页面要回答的是「上级这次点播现在到哪一步了」，
+     * 分成两个不相干的表格反而看不出同一条 INVITE 的流转。
+     *
+     * @return 按创建时间倒序的会话列表
+     */
+    public List<CascadeRuntimeSnapshotDTO.MediaSessionInfo> snapshotSessions() {
+        List<CascadeRuntimeSnapshotDTO.MediaSessionInfo> list =
+            new ArrayList<>(pendingSessions.size() + activeSessions.size());
+        pendingSessions.forEach((callId, session) -> list.add(toSessionInfo(callId, "PENDING", session)));
+        activeSessions.forEach((callId, session) -> list.add(toSessionInfo(callId, "ACTIVE", session)));
+        list.sort(Comparator.comparingLong(CascadeRuntimeSnapshotDTO.MediaSessionInfo::createdAt).reversed());
+        return list;
+    }
+
+    private CascadeRuntimeSnapshotDTO.MediaSessionInfo toSessionInfo(String callId, String phase,
+        MediaSession session) {
+        return new CascadeRuntimeSnapshotDTO.MediaSessionInfo(callId, phase, session.ssrc, session.localDeviceId,
+            session.upperUserId, session.playback, session.download, session.app, session.stream, session.dstUrl,
+            session.dstPort, session.udp, session.srcPort, session.createdAt, session.lastActiveAt);
     }
 
     /**

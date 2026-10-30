@@ -768,6 +768,26 @@ CREATE TABLE tb_cascade_record_request
 );
 
 
+-- ----------------------------
+-- Table structure for tb_sys_config  (系统配置：DB 覆盖值 + 代码内默认值)
+-- ----------------------------
+DROP TABLE IF EXISTS tb_sys_config;
+CREATE TABLE tb_sys_config
+(
+    id           BIGSERIAL,
+    create_time  TIMESTAMP                                            NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time  TIMESTAMP                                            NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    config_key   VARCHAR(128) NOT NULL,
+    config_value VARCHAR(512)          DEFAULT NULL,
+    config_group VARCHAR(64)  NOT NULL,
+    value_type   VARCHAR(16)  NOT NULL DEFAULT 'STRING',
+    description  VARCHAR(255)          DEFAULT NULL,
+    editable     SMALLINT     NOT NULL DEFAULT 1,
+    PRIMARY KEY (id),
+    UNIQUE (config_key)
+);
+
+
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
@@ -1160,5 +1180,27 @@ FROM tb_menu
 WHERE id IN (800, 801, 80101, 80102)
 ON CONFLICT DO NOTHING;
 ON CONFLICT (role_id, menu_id) DO NOTHING;
+
+-- ----------------------------
+-- 1.0.13 系统配置页 + 级联运行状态页（菜单 + 权限 + 授权）
+-- ----------------------------
+INSERT INTO tb_menu (id, parent_id, menu_code, menu_name, menu_type, path, component, icon,
+                     sort_order, status, permission, meta)
+VALUES
+(205, 2, 'SystemConfig', 'system.config.title', 2, '/system/config', '/system/config/list', 'mdi:cog-outline', 5, 1,
+ 'System:Config:List',
+ '{"icon": "mdi:cog-outline", "title": "system.config.title", "hideInMenu": false}'),
+(604, 500, 'CascadeMonitor', 'cascade.monitor.title', 2, '/device/cascade/monitor', '/cascade/monitor/list',
+ 'mdi:chart-timeline-variant', 7, 1, 'Cascade:Monitor:List',
+ '{"icon": "mdi:chart-timeline-variant", "title": "cascade.monitor.title", "hideInMenu": false}')
+ON CONFLICT (id) DO UPDATE
+SET parent_id  = EXCLUDED.parent_id, menu_name = EXCLUDED.menu_name, path = EXCLUDED.path,
+    component  = EXCLUDED.component, permission = EXCLUDED.permission, meta = EXCLUDED.meta;
+
+INSERT INTO tb_role_menu (role_id, menu_id)
+SELECT 1, id
+FROM tb_menu
+WHERE id IN (205, 604)
+ON CONFLICT DO NOTHING;
 
 SET FOREIGN_KEY_CHECKS = 1;

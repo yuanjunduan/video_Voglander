@@ -844,6 +844,24 @@ CREATE TABLE tb_cascade_record_request
 CREATE INDEX idx_cascade_record_local ON tb_cascade_record_request (local_device_id, status);
 CREATE INDEX idx_cascade_record_created ON tb_cascade_record_request (create_time);
 
+-- ----------------------------
+-- 系统配置表（DB 覆盖值 + 代码内默认值，页面可热改的参数集中在此）
+-- ----------------------------
+DROP TABLE IF EXISTS tb_sys_config;
+CREATE TABLE tb_sys_config
+(
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    create_time  DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    update_time  DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    config_key   VARCHAR(128)                            NOT NULL,
+    config_value VARCHAR(512) DEFAULT NULL,
+    config_group VARCHAR(64)                             NOT NULL,
+    value_type   VARCHAR(16)  DEFAULT 'STRING'           NOT NULL,
+    description  VARCHAR(255) DEFAULT NULL,
+    editable     INTEGER      DEFAULT 1                  NOT NULL
+);
+CREATE UNIQUE INDEX uk_sys_config_key ON tb_sys_config (config_key);
+
 
 -- GB28181-2022 设备订阅状态表
 DROP TABLE IF EXISTS tb_device_subscription;
@@ -1074,5 +1092,21 @@ INSERT OR IGNORE INTO tb_role_menu (role_id, menu_id)
 SELECT 1, id
 FROM tb_menu
 WHERE id IN (700, 701, 702, 70101, 70102, 70103, 70104, 70105, 70201, 70202, 70203);
+
+-- 1.0.13 系统配置页 + 级联运行状态页（菜单 + 权限 + 授权）
+INSERT OR IGNORE INTO tb_menu (id, parent_id, menu_code, menu_name, menu_type, path, component, icon, sort_order,
+                               status, permission, meta)
+VALUES
+(205, 2, 'SystemConfig', 'system.config.title', 2, '/system/config', '/system/config/list', 'mdi:cog-outline', 5, 1,
+ 'System:Config:List',
+ '{"icon": "mdi:cog-outline", "title": "system.config.title", "hideInMenu": false}'),
+(604, 500, 'CascadeMonitor', 'cascade.monitor.title', 2, '/device/cascade/monitor', '/cascade/monitor/list',
+ 'mdi:chart-timeline-variant', 7, 1, 'Cascade:Monitor:List',
+ '{"icon": "mdi:chart-timeline-variant", "title": "cascade.monitor.title", "hideInMenu": false}');
+
+INSERT OR IGNORE INTO tb_role_menu (role_id, menu_id)
+SELECT 1, id
+FROM tb_menu
+WHERE id IN (205, 604);
 
 PRAGMA foreign_keys = ON;

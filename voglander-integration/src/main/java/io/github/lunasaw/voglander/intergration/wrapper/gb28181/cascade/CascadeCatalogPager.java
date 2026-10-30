@@ -2,6 +2,7 @@ package io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -15,6 +16,9 @@ import io.github.lunasaw.sip.common.transmit.event.Event;
 import io.github.lunasaw.sip.common.utils.SipRequestUtils;
 import io.github.lunasaw.voglander.common.anno.TechnicalScheduler;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeRuntimeSnapshotDTO;
+import io.github.lunasaw.voglander.manager.manager.SysConfigManager;
+import io.github.lunasaw.voglander.manager.sys.SysConfigCatalog;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -45,29 +49,39 @@ public class CascadeCatalogPager {
 
     private final CascadeUpperMessenger    cascadeUpperMessenger;
     private final CascadeCatalogAssembler  catalogAssembler;
+    /** 分片参数取值入口：库内覆盖值优先，yml 与下面的字段值仅作为回落 */
+    private final SysConfigManager         sysConfigManager;
 
     /**
      * 单条目录 MESSAGE 容纳的通道数上限。
      *
      * <p>上级（海康 iSecure Center 等）对单条 SIP MESSAGE 报文长度有限制，通道多时整包下发会被
      * 丢弃或截断，表现为"只有前几十个通道"。超过本值即分片下发。
+     *
+     * <p>本字段只是 yml 回落值；实际取值优先用 {@code gateway.cascade.catalog.batch-size}
+     * 的库内覆盖值，现场改完立即生效，不必重启。
      */
     @Value("${gateway.cascade.catalog.batch-size:50}")
     private int  catalogBatchSize = 50;
 
-    /** 是否串行发送（等上一页 200 OK 再发下一页）；关掉则退回一次性 burst，便于现场快速对比。 */
+    /** yml 回落值：是否串行发送（等上一页 200 OK 再发下一页）。 */
     @Value("${gateway.cascade.catalog.serial:true}")
     private boolean serial = true;
 
-    /** 单页等待 200 OK 的超时（毫秒）：超时即视为已送达并推进，避免上级不回 2xx 时目录卡死。 */
+    /** yml 回落值：单页等待 200 OK 的超时（毫秒）。 */
     @Value("${gateway.cascade.catalog.ok-timeout-ms:2000}")
     private long okTimeoutMs = 2000L;
 
-    /** 看门狗扫描间隔（毫秒）。 */
+    /**
+     * 看门狗扫描间隔（毫秒）。
+     *
+     * <p>只从 yml 读：它是 {@code @Scheduled} 的表达式，Spring 启动时解析一次就不再重读，
+     * 库内覆盖值对它无效，因此不在 {@code SysConfigCatalog} 的可热改清单里。
+     */
     @Value("${gateway.cascade.catalog.scan-interval-ms:1000}")
     private long scanIntervalMs = 1000L;
 
-    /** 整批目录的最大存活时间（毫秒）：超过即丢弃，防止上级中途断开时残留整棵目录树占用内存。 */
+    /** yml 回落值：整批目录的最大存活时间（毫秒）。 */
     @Value("${gateway.cascade.catalog.batch-ttl-ms:120000}")
     private long batchTtlMs = 120000L;
 
@@ -97,7 +111,7 @@ public class CascadeCatalogPager {
         /* 不用 defaultIfBlank：它的默认值是急求值的，入站 Call-ID 非空时也会白生成一个 */
         String firstCallId = StringUtils.isNotBlank(inboundCallId) ? inboundCallId : SipRequestUtils.getNewCallId();
 
-        if (!serial || pages.size() <= 1) {
+        if (!serialMode() || pages.size() <= 1) {
             return sendAll(platform, firstCallId, deviceId, sn, sumNum, pages);
         }
 
@@ -148,7 +162,7 @@ public class CascadeCatalogPager {
         }
         long now = System.currentTimeMillis();
         for (Map.Entry<String, PageBatch> entry : inflight.entrySet()) {
-            if (now - entry.getValue().inflightAt < okTimeoutMs) {
+            if (now - entry.getValue().inflightAt < okTimeoutMs()) {
                 continue;
             }
             if (inflight.remove(entry.getKey(), entry.getValue())) {
@@ -157,7 +171,7 @@ public class CascadeCatalogPager {
         }
         for (Map.Entry<String, PageBatch> entry : batches.entrySet()) {
             PageBatch batch = entry.getValue();
-            if (now - batch.startAt > batchTtlMs) {
+            if (now - batch.startAt > batchTtlMs()) {
                 batches.remove(entry.getKey(), batch);
                 inflight.values().remove(batch);
                 log.warn("目录分片批次超时丢弃: key={}, 已发={}/{}", batch.key, batch.cursor, batch.pages.size());
@@ -226,7 +240,7 @@ public class CascadeCatalogPager {
             return pages;
         }
         pages.add(nodes.subList(0, 1));
-        int batchSize = catalogBatchSize > 0 ? catalogBatchSize : 50;
+        int batchSize = batchSize();
         for (int offset = 1; offset < nodes.size(); offset += batchSize) {
             pages.add(nodes.subList(offset, Math.min(offset + batchSize, nodes.size())));
         }
@@ -236,6 +250,66 @@ public class CascadeCatalogPager {
     /** 已发页数（首页已发，{@code cursor} 即下一待发下标）。 */
     private int completedCount(PageBatch batch) {
         return batch.cursor;
+    }
+
+    /**
+     * 生效的分片大小：库内覆盖值优先，取不到或非法时回落 yml/默认值。
+     *
+     * @return 恒为正数
+     */
+    private int batchSize() {
+        int configured = sysConfigManager.getInt(SysConfigCatalog.CASCADE_CATALOG_BATCH_SIZE, catalogBatchSize);
+        return configured > 0 ? configured : 50;
+    }
+
+    /** 生效的串行开关：库内覆盖值优先，取不到时回落 yml/默认值。 */
+    private boolean serialMode() {
+        return sysConfigManager.getBoolean(SysConfigCatalog.CASCADE_CATALOG_SERIAL, serial);
+    }
+
+    /** 生效的单页 200 OK 超时：库内覆盖值优先，取不到时回落 yml/默认值。 */
+    private long okTimeoutMs() {
+        return sysConfigManager.getLong(SysConfigCatalog.CASCADE_CATALOG_OK_TIMEOUT_MS, okTimeoutMs);
+    }
+
+    /** 生效的批次存活时间：库内覆盖值优先，取不到时回落 yml/默认值。 */
+    private long batchTtlMs() {
+        return sysConfigManager.getLong(SysConfigCatalog.CASCADE_CATALOG_BATCH_TTL_MS, batchTtlMs);
+    }
+
+    /**
+     * 导出进行中的分片批次（只读投影，供运行状态页展示）。
+     *
+     * <p>不直接暴露 {@link PageBatch}：批次内部持有平台快照与分页列表，页面不需要，
+     * 也不希望外部代码顺着它改状态。
+     *
+     * @return 按创建时间倒序的批次列表
+     */
+    public List<CascadeRuntimeSnapshotDTO.CatalogBatch> snapshotBatches() {
+        long now = System.currentTimeMillis();
+        List<CascadeRuntimeSnapshotDTO.CatalogBatch> list = new ArrayList<>(batches.size());
+        for (PageBatch batch : batches.values()) {
+            list.add(new CascadeRuntimeSnapshotDTO.CatalogBatch(batch.key, batch.platform.getPlatformId(), batch.sn,
+                batch.sumNum, batch.cursor, batch.pages.size(), batch.startAt, Math.max(0L, now - batch.inflightAt)));
+        }
+        list.sort(Comparator.comparingLong(CascadeRuntimeSnapshotDTO.CatalogBatch::startAt).reversed());
+        return list;
+    }
+
+    /**
+     * 导出已发出、等 200 OK 的分片（只读投影）。
+     *
+     * @return 按等待时长倒序的分片列表（等最久的排前面，便于一眼看出卡在哪一包）
+     */
+    public List<CascadeRuntimeSnapshotDTO.InflightPage> snapshotInflight() {
+        long now = System.currentTimeMillis();
+        List<CascadeRuntimeSnapshotDTO.InflightPage> list = new ArrayList<>(inflight.size());
+        for (Map.Entry<String, PageBatch> entry : inflight.entrySet()) {
+            list.add(new CascadeRuntimeSnapshotDTO.InflightPage(entry.getKey(), entry.getValue().key,
+                Math.max(0L, now - entry.getValue().inflightAt)));
+        }
+        list.sort(Comparator.comparingLong(CascadeRuntimeSnapshotDTO.InflightPage::waitingMs).reversed());
+        return list;
     }
 
     /** 按 Call-ID 绑定的成功回调：上级对本页回 2xx 即推进下一页。 */

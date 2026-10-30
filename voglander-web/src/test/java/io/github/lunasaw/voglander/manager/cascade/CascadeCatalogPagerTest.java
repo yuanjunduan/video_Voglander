@@ -25,6 +25,8 @@ import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeC
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeCatalogPager;
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeUpperMessenger;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
+import io.github.lunasaw.voglander.manager.manager.SysConfigManager;
+import io.github.lunasaw.voglander.manager.sys.SysConfigCatalog;
 
 /**
  * {@link CascadeCatalogPager} 单元测试（附录 N）。
@@ -43,6 +45,7 @@ class CascadeCatalogPagerTest {
 
     @Mock CascadeUpperMessenger   upperMessenger;
     @Mock CascadeCatalogAssembler catalogAssembler;
+    @Mock SysConfigManager        sysConfigManager;
     @InjectMocks CascadeCatalogPager pager;
 
     private final List<String> sentCallIds = new ArrayList<>();
@@ -53,6 +56,12 @@ class CascadeCatalogPagerTest {
         setField("catalogBatchSize", 50);
         setField("okTimeoutMs", 2000L);
         setField("batchTtlMs", 120000L);
+        /* 没有库内覆盖值时直接回落 yml/字段值，与线上"未配覆盖值"的路径一致 */
+        when(sysConfigManager.getInt(eq(SysConfigCatalog.CASCADE_CATALOG_BATCH_SIZE), anyInt()))
+            .thenAnswer(inv -> inv.getArgument(1));
+        when(sysConfigManager.getBoolean(eq(SysConfigCatalog.CASCADE_CATALOG_SERIAL), anyBoolean()))
+            .thenAnswer(inv -> inv.getArgument(1));
+        when(sysConfigManager.getLong(anyString(), anyLong())).thenAnswer(inv -> inv.getArgument(1));
         when(catalogAssembler.renderCatalogResponse(any(), any(), anyInt(), anyList()))
             .thenAnswer(inv -> "page");
         when(upperMessenger.send(any(CascadePlatformDTO.class), anyString(), nullable(String.class),

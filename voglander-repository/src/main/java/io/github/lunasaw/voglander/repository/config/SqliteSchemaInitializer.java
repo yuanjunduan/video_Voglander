@@ -23,7 +23,7 @@ import lombok.extern.slf4j.Slf4j;
  * {@code app.db}/{@code test-app.db} 携带 schema。该 db 二进制移出版本控制后，新 clone 将无表可用。
  * 本类在启动时检测空库并执行权威建表脚本 {@code classpath:db/voglander-sqlite.sql}
  * （由 repository 模块构建期从根目录 {@code sql/voglander-sqlite.sql} 拷入，单一源），
- * 一次性建出 26 张表 + 默认 admin/角色/菜单种子，并登记通用任务与图像域迁移。
+ * 一次性建出 28 张表 + 默认 admin/角色/菜单种子，并登记通用任务与图像域迁移。
  * </p>
  * <p>
  * <b>幂等保证</b>：脚本结构段含 {@code DROP TABLE IF EXISTS}（破坏性），故仅在<b>未建全库</b>
@@ -63,9 +63,10 @@ public class SqliteSchemaInitializer {
     private static final String SENTINEL_TABLE      = "tb_cascade_channel";
 
     /**
-     * 权威脚本应建出的 {@code tb_} 业务表数：旧基线去掉 export 后为 20 张，新增通用任务三表和图像三表。
+     * 权威脚本应建出的 {@code tb_} 业务表数：旧基线去掉 export 后为 20 张，新增通用任务三表、图像三表、
+     * 级联组织表与系统配置表。
      */
-    private static final int    EXPECTED_TABLE_COUNT = 26;
+    private static final int    EXPECTED_TABLE_COUNT = 28;
 
     /** 1.0.9 之前可无损升级的合法业务表数。 */
     private static final int    LEGACY_TABLE_COUNT   = 21;
@@ -84,6 +85,9 @@ public class SqliteSchemaInitializer {
 
     @Autowired(required = false)
     private SqliteCascadeChannelMetaSchemaMigrator cascadeChannelMetaSchemaMigrator;
+
+    @Autowired(required = false)
+    private SqliteSysConfigSchemaMigrator          sysConfigSchemaMigrator;
 
     /**
      * 启动时按需初始化 SQLite schema。非 SQLite 跳过；已建全库跳过。
@@ -113,6 +117,7 @@ public class SqliteSchemaInitializer {
                 migrateImageSchema();
                 migrateCascadeOrgSchema();
                 migrateCascadeChannelMetaSchema();
+                migrateSysConfigSchema();
                 verifySchemaComplete();
                 log.debug("SQLite 已存在 sentinel 表 {} 且迁移后表数达标，跳过全量建表", SENTINEL_TABLE);
                 return;
@@ -132,6 +137,7 @@ public class SqliteSchemaInitializer {
             migrateImageSchema();
             migrateCascadeOrgSchema();
             migrateCascadeChannelMetaSchema();
+            migrateSysConfigSchema();
             verifySchemaComplete();
             log.info("SQLite schema 初始化完成（建表 {} 张 + 默认 admin/角色/菜单种子）", EXPECTED_TABLE_COUNT);
         } catch (RuntimeException e) {
@@ -210,6 +216,21 @@ public class SqliteSchemaInitializer {
         SqliteCascadeChannelMetaSchemaMigrator migrator = cascadeChannelMetaSchemaMigrator;
         if (migrator == null) {
             migrator = new SqliteCascadeChannelMetaSchemaMigrator();
+            migrator.setDataSource(dataSource);
+        }
+        migrator.migrate();
+    }
+
+    /**
+     * 系统配置表 {@code tb_sys_config} 的幂等补齐（1.0.13 新增）。
+     *
+     * <p>不放在表数校验之后：老库（sentinel 在、表数 27）若不先补出这张表，
+     * {@code verifySchemaComplete()} 会以「表数不足」阻断启动，升级窗口直接被拒之门外。
+     */
+    private void migrateSysConfigSchema() {
+        SqliteSysConfigSchemaMigrator migrator = sysConfigSchemaMigrator;
+        if (migrator == null) {
+            migrator = new SqliteSysConfigSchemaMigrator();
             migrator.setDataSource(dataSource);
         }
         migrator.migrate();

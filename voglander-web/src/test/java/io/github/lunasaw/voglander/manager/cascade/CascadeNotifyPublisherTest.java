@@ -3,6 +3,7 @@ package io.github.lunasaw.voglander.manager.cascade;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
@@ -52,6 +53,7 @@ import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
 import io.github.lunasaw.voglander.manager.manager.CascadePlatformManager;
 import io.github.lunasaw.voglander.manager.manager.CascadeSubscribeManager;
 import io.github.lunasaw.voglander.manager.manager.DeviceChannelManager;
+import io.github.lunasaw.voglander.manager.manager.SysConfigManager;
 
 /**
  * {@link CascadeNotifyPublisher} 单元测试（C3/C4/C5）。
@@ -84,6 +86,8 @@ class CascadeNotifyPublisherTest {
     private DeviceChannelManager    deviceChannelManager;
     @Mock
     private CascadeChannelMetaResolver channelMetaResolver;
+    @Mock
+    private SysConfigManager          sysConfigManager;
 
     private CascadeNotifyPublisher publisher;
 
@@ -91,10 +95,12 @@ class CascadeNotifyPublisherTest {
     void setUp() {
         /* 目录元数据派生留空，通道项走 CascadeChannelMeta.DEFAULT，与真实兜底分支一致 */
         when(channelMetaResolver.resolve(any())).thenReturn(java.util.Map.of());
+        /* 无库内覆盖值时回落 yml/字段值（默认每包 50 条） */
+        when(sysConfigManager.getInt(any(), anyInt())).thenAnswer(inv -> inv.getArgument(1));
         CascadeCatalogAssembler catalogAssembler = new CascadeCatalogAssembler(cascadePlatformManager,
             cascadeOrgManager, cascadeChannelManager, deviceChannelManager, channelMetaResolver);
         publisher = new CascadeNotifyPublisher(cascadeSubscribeManager, cascadePlatformManager,
-            cascadeChannelManager, cascadeDeviceSupplier, notifyAckTracker, catalogAssembler);
+            cascadeChannelManager, cascadeDeviceSupplier, notifyAckTracker, catalogAssembler, sysConfigManager);
     }
 
     private CascadeSubscribeDTO sub(String platformId, String sn) {

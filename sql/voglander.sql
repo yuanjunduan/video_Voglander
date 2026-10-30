@@ -889,6 +889,29 @@ CREATE TABLE `tb_cascade_record_request`
   COLLATE = utf8mb4_bin COMMENT ='级联录像查询请求上下文表';
 
 
+-- ----------------------------
+-- Table structure for tb_sys_config  (系统配置：DB 覆盖值 + 代码内默认值)
+-- ----------------------------
+DROP TABLE IF EXISTS `tb_sys_config`;
+CREATE TABLE `tb_sys_config`
+(
+    `id`           BIGINT UNSIGNED                                       NOT NULL AUTO_INCREMENT,
+    `create_time`  DATETIME                                              NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `update_time`  DATETIME                                              NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+    `config_key`   VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '配置键',
+    `config_value` VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin          DEFAULT NULL COMMENT '配置值(空=用代码内默认值)',
+    `config_group` VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '配置分组',
+    `value_type`   VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin  NOT NULL DEFAULT 'STRING' COMMENT 'STRING/INT/LONG/BOOLEAN',
+    `description`  VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin          DEFAULT NULL COMMENT '说明',
+    `editable`     TINYINT                                               NOT NULL DEFAULT 1 COMMENT '1 可热改 0 需重启',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_sys_config_key` (`config_key`) USING BTREE
+) ENGINE = InnoDB
+  AUTO_INCREMENT = 1
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_bin COMMENT ='系统配置表';
+
+
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
@@ -1297,5 +1320,30 @@ INSERT IGNORE INTO `tb_role_menu` (`role_id`, `menu_id`)
 SELECT 1, `id`
 FROM `tb_menu`
 WHERE `id` IN (800, 801, 80101, 80102);
+
+-- ----------------------------
+-- 1.0.13 系统配置页 + 级联运行状态页（菜单 + 权限 + 授权）
+-- ----------------------------
+INSERT INTO `tb_menu` (`id`, `parent_id`, `menu_code`, `menu_name`, `menu_type`, `path`, `component`, `icon`,
+                       `sort_order`, `status`, `permission`, `meta`)
+VALUES
+(205, 2, 'SystemConfig', 'system.config.title', 2, '/system/config', '/system/config/list', 'mdi:cog-outline', 5, 1,
+ 'System:Config:List',
+ JSON_OBJECT('icon', 'mdi:cog-outline', 'title', 'system.config.title', 'hideInMenu', false)),
+(604, 500, 'CascadeMonitor', 'cascade.monitor.title', 2, '/device/cascade/monitor', '/cascade/monitor/list',
+ 'mdi:chart-timeline-variant', 7, 1, 'Cascade:Monitor:List',
+ JSON_OBJECT('icon', 'mdi:chart-timeline-variant', 'title', 'cascade.monitor.title', 'hideInMenu', false))
+ON DUPLICATE KEY UPDATE `menu_name`  = VALUES(`menu_name`),
+                        `path`       = VALUES(`path`),
+                        `component`  = VALUES(`component`),
+                        `icon`       = VALUES(`icon`),
+                        `sort_order` = VALUES(`sort_order`),
+                        `permission` = VALUES(`permission`),
+                        `meta`       = VALUES(`meta`);
+
+INSERT IGNORE INTO `tb_role_menu` (`role_id`, `menu_id`)
+SELECT 1, `id`
+FROM `tb_menu`
+WHERE `id` IN (205, 604);
 
 SET FOREIGN_KEY_CHECKS = 1;

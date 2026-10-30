@@ -27,6 +27,8 @@ import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeSubscribeDT
 import io.github.lunasaw.voglander.manager.manager.CascadeChannelManager;
 import io.github.lunasaw.voglander.manager.manager.CascadePlatformManager;
 import io.github.lunasaw.voglander.manager.manager.CascadeSubscribeManager;
+import io.github.lunasaw.voglander.manager.manager.SysConfigManager;
+import io.github.lunasaw.voglander.manager.sys.SysConfigCatalog;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -53,8 +55,10 @@ public class CascadeNotifyPublisher {
     private final CascadeDeviceSupplier   cascadeDeviceSupplier;
     private final CascadeNotifyAckTracker notifyAckTracker;
     private final CascadeCatalogAssembler catalogAssembler;
+    /** 目录分片参数取值入口：与查询应答共用同一组库内覆盖值 */
+    private final SysConfigManager        sysConfigManager;
 
-    /** 单条目录 NOTIFY 容纳的通道数，与 {@code CascadeQueryHandler} 共用同一配置项 */
+    /** 单条目录 NOTIFY 容纳的通道数（yml 回落值），与 {@code CascadeQueryHandler} 共用同一配置项 */
     @Value("${gateway.cascade.catalog.batch-size:50}")
     private int catalogBatchSize = 50;
 
@@ -92,7 +96,7 @@ public class CascadeNotifyPublisher {
         List<CascadeCatalogNode> nodes = catalogAssembler.assemble(platformId, domainId);
 
         int total = nodes.size();
-        int batchSize = catalogBatchSize > 0 ? catalogBatchSize : 50;
+        int batchSize = batchSize();
         String snValue = StringUtils.defaultIfBlank(sn, String.valueOf(System.currentTimeMillis() % 1_000_000));
         String eventId = resolveCatalogEventId(platformId, snValue);
 
@@ -113,6 +117,16 @@ public class CascadeNotifyPublisher {
         log.info("目录快照推送完成: platformId={}, sn={}, eventId={}, 节点数={}, 分包={}, 批次大小={}",
             platformId, snValue, eventId, total, sent, batchSize);
         return sent;
+    }
+
+    /**
+     * 生效的分片大小：库内覆盖值优先，取不到或非法时回落 yml/默认值。
+     *
+     * @return 恒为正数
+     */
+    private int batchSize() {
+        int configured = sysConfigManager.getInt(SysConfigCatalog.CASCADE_CATALOG_BATCH_SIZE, catalogBatchSize);
+        return configured > 0 ? configured : 50;
     }
 
     /**
