@@ -469,7 +469,9 @@ VALUES
 (60202, 602, 'CascadeChannelEdit', 'cascade.channel.edit', 3, null, null, '', 2, 1, 'Cascade:Channel:Edit',
  JSON_OBJECT('title', 'cascade.channel.edit', 'hideInMenu', true)),
 (60203, 602, 'CascadeChannelDelete', 'cascade.channel.delete', 3, null, null, '', 3, 1, 'Cascade:Channel:Delete',
- JSON_OBJECT('title', 'cascade.channel.delete', 'hideInMenu', true));
+ JSON_OBJECT('title', 'cascade.channel.delete', 'hideInMenu', true)),
+(60204, 602, 'CascadeChannelStatus', 'cascade.channel.status', 3, null, null, '', 4, 1, 'Cascade:Channel:Status',
+ JSON_OBJECT('title', 'cascade.channel.status', 'hideInMenu', true));
 
 -- 插入Project子菜单
 INSERT INTO tb_menu (id, parent_id, menu_code, menu_name, menu_type, path, component, icon, sort_order, status,
