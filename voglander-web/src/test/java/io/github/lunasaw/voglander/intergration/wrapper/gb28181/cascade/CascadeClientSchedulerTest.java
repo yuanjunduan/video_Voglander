@@ -2,6 +2,7 @@ package io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
@@ -18,6 +19,7 @@ import org.mockito.MockedStatic;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import io.github.lunasaw.gb28181.common.entity.notify.DeviceKeepLiveNotify;
 import io.github.lunasaw.gbproxy.client.transmit.cmd.ClientCommandSender;
 import io.github.lunasaw.sip.common.entity.FromDevice;
 import io.github.lunasaw.sip.common.entity.ToDevice;
@@ -132,6 +134,35 @@ class CascadeClientSchedulerTest {
 
         verify(cascadePlatformManager, atLeastOnce())
             .updateRegisterStatus(2L, CascadeConstant.RegisterStatus.FAILED);
+    }
+
+    @Test
+    @DisplayName("保活 MESSAGE 的 Status 必须是 ON，不能把平台编码当状态值")
+    void keepalive_should_send_status_on() throws Exception {
+        CascadePlatformDTO dto = platform(1L, null);
+        dto.setRegisterStatus(CascadeConstant.RegisterStatus.ONLINE);
+        FromDevice from = new FromDevice();
+        from.setUserId(dto.getLocalClientId());
+        ToDevice to = new ToDevice();
+        when(cascadePlatformManager.getById(1L)).thenReturn(dto);
+        when(cascadeDeviceSupplier.buildFromDevice(dto)).thenReturn(from);
+        when(cascadeDeviceSupplier.buildToDevice(dto)).thenReturn(to);
+
+        scheduler = newScheduler();
+        /* doKeepalive 由定时任务驱动，间隔以分钟计，这里直接反射调用以断言报文状态值 */
+        java.lang.reflect.Method keepalive = CascadeClientScheduler.class
+            .getDeclaredMethod("doKeepalive", CascadePlatformDTO.class);
+        keepalive.setAccessible(true);
+
+        try (MockedStatic<ClientCommandSender> mocked = mockStatic(ClientCommandSender.class)) {
+            keepalive.invoke(scheduler, dto);
+
+            ArgumentCaptor<DeviceKeepLiveNotify> captor = ArgumentCaptor.forClass(DeviceKeepLiveNotify.class);
+            mocked.verify(() -> ClientCommandSender.sendKeepaliveCommand(eq(from), eq(to), captor.capture()));
+            /* 框架的三参 String 重载会把 deviceId 写进 <Status>，海康据此判下级域离线 */
+            assertEquals("ON", captor.getValue().getStatus());
+            assertEquals(dto.getLocalClientId(), captor.getValue().getDeviceId());
+        }
     }
 
     /* ---------------- 失败可见性与退避重试 ---------------- */

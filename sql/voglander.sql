@@ -458,7 +458,7 @@ VALUES
 
 -- 实时事件（跨设备 SSE 事件流；原为设备详情右栏第 04 格，空间不足迁出为独立页）
 (503, 500, 'DeviceEvents', 'device.events.title', 2, '/device/events', '/device/events/list',
- 'mdi:timeline-text-outline', 5, 1, 'Device:Event:Query',
+ 'mdi:timeline-text-outline', 6, 1, 'Device:Event:Query',
  JSON_OBJECT('icon', 'mdi:timeline-text-outline', 'title', 'device.events.title', 'hideInMenu', false));
 
 -- 插入Device按钮权限(menu_type=3,隐藏,仅用于鉴权,与前端 hasAccessByCodes 引用对齐)
@@ -496,18 +496,22 @@ VALUES
 (50202, 502, 'DeviceChannelDelete', 'device.action.delete', 3, null, null, '', 2, 1, 'Device:Channel:Delete',
  JSON_OBJECT('title', 'device.action.delete', 'hideInMenu', true));
 
--- 插入级联平台管理菜单（601，作为设备管理的子菜单）
+-- 插入级联管理菜单（601 平台 / 603 组织 / 602 通道，作为设备管理的子菜单）
+-- 顺序按实际配置链路排列：先建上级平台 → 再按区域/项目建组织树 → 最后把通道挂到组织下
 INSERT INTO tb_menu (id, parent_id, menu_code, menu_name, menu_type, path, component, icon, sort_order, status,
                      permission, meta)
 VALUES
 (601, 500, 'CascadePlatform', 'cascade.platform.title', 2, '/device/cascade/platform', '/cascade/platform/list',
  'mdi:server-network-outline', 3, 1, 'Cascade:Platform:List',
  JSON_OBJECT('icon', 'mdi:server-network-outline', 'title', 'cascade.platform.title', 'hideInMenu', false)),
+(603, 500, 'CascadeOrg', 'cascade.org.title', 2, '/device/cascade/org', '/cascade/org/list',
+ 'mdi:file-tree', 4, 1, 'Cascade:Org:List',
+ JSON_OBJECT('icon', 'mdi:file-tree', 'title', 'cascade.org.title', 'hideInMenu', false)),
 (602, 500, 'CascadeChannel', 'cascade.channel.title', 2, '/device/cascade/channel', '/cascade/channel/list',
- 'mdi:swap-horizontal', 4, 1, 'Cascade:Channel:List',
+ 'mdi:swap-horizontal', 5, 1, 'Cascade:Channel:List',
  JSON_OBJECT('icon', 'mdi:swap-horizontal', 'title', 'cascade.channel.title', 'hideInMenu', false));
 
--- 级联平台列表（601）/ 通道映射（602）按钮权限
+-- 级联平台列表（601）/ 组织树（603）/ 通道映射（602）按钮权限
 INSERT INTO tb_menu (id, parent_id, menu_code, menu_name, menu_type, path, component, icon, sort_order, status,
                      permission, meta)
 VALUES
@@ -519,6 +523,14 @@ VALUES
  JSON_OBJECT('title', 'cascade.platform.delete', 'hideInMenu', true)),
 (60104, 601, 'CascadePlatformStatus', 'cascade.platform.status', 3, null, null, '', 4, 1, 'Cascade:Platform:Status',
  JSON_OBJECT('title', 'cascade.platform.status', 'hideInMenu', true)),
+(60301, 603, 'CascadeOrgCreate', 'cascade.org.create', 3, null, null, '', 1, 1, 'Cascade:Org:Create',
+ JSON_OBJECT('title', 'cascade.org.create', 'hideInMenu', true)),
+(60302, 603, 'CascadeOrgEdit', 'cascade.org.edit', 3, null, null, '', 2, 1, 'Cascade:Org:Edit',
+ JSON_OBJECT('title', 'cascade.org.edit', 'hideInMenu', true)),
+(60303, 603, 'CascadeOrgDelete', 'cascade.org.delete', 3, null, null, '', 3, 1, 'Cascade:Org:Delete',
+ JSON_OBJECT('title', 'cascade.org.delete', 'hideInMenu', true)),
+(60304, 603, 'CascadeOrgStatus', 'cascade.org.status', 3, null, null, '', 4, 1, 'Cascade:Org:Status',
+ JSON_OBJECT('title', 'cascade.org.status', 'hideInMenu', true)),
 (60201, 602, 'CascadeChannelCreate', 'cascade.channel.create', 3, null, null, '', 1, 1, 'Cascade:Channel:Create',
  JSON_OBJECT('title', 'cascade.channel.create', 'hideInMenu', true)),
 (60202, 602, 'CascadeChannelEdit', 'cascade.channel.edit', 3, null, null, '', 2, 1, 'Cascade:Channel:Edit',
@@ -778,13 +790,48 @@ CREATE TABLE `tb_cascade_channel`
     `local_channel_id`   VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '本地通道ID',
     `cascade_channel_id` VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '上报给上级的通道ID(默认同local)',
     `cascade_name`       VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin         DEFAULT NULL COMMENT '通道名称',
+    `cascade_org_id`     VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin          DEFAULT NULL COMMENT '所属上级组织编码(空=挂平台根节点)',
     `enabled`            TINYINT                                               NOT NULL DEFAULT 1 COMMENT '1上报 0不上报',
+    `manufacturer`       VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin          DEFAULT NULL COMMENT '厂商(Hik/Dahua/Jovision)，空=按设备通道数据自动派生',
+    `model`              VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin         DEFAULT NULL COMMENT '设备型号，空=自动派生',
+    `address`            VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin         DEFAULT NULL COMMENT '安装地址，空=自动派生(GB28181 目录 Address)',
+    `ip_address`         VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin          DEFAULT NULL COMMENT '设备IP，空=自动派生(目录IP→源设备IP→设备表IP)',
+    `ptz_type`           TINYINT                                                        DEFAULT NULL COMMENT '摄像机类型 1球机 2半球 3枪机，空或0=自动派生(缺省枪机)',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_cascade_platform_local` (`platform_id`, `local_channel_id`) USING BTREE
+    UNIQUE KEY `uk_cascade_platform_local` (`platform_id`, `local_channel_id`) USING BTREE,
+    KEY `idx_cascade_channel_org` (`platform_id`, `cascade_org_id`) USING BTREE
 ) ENGINE = InnoDB
   AUTO_INCREMENT = 1
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_bin COMMENT ='级联上报通道表';
+
+
+-- ----------------------------
+-- Table structure for tb_cascade_org  (级联组织树)
+-- 上级按 Item/ParentID 建目录树，通道必须挂在组织节点下才可见；
+-- 每平台一套独立组织，与本地部门(tb_dept)解耦。
+-- ----------------------------
+DROP TABLE IF EXISTS `tb_cascade_org`;
+CREATE TABLE `tb_cascade_org`
+(
+    `id`             BIGINT UNSIGNED                                       NOT NULL AUTO_INCREMENT,
+    `create_time`    DATETIME                                              NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `update_time`    DATETIME                                              NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+    `platform_id`    VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '上级平台ID',
+    `parent_org_id`  BIGINT UNSIGNED                                                DEFAULT NULL COMMENT '父组织(tb_cascade_org.id)，空=根组织挂平台节点',
+    `org_path`       VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '' COMMENT '物化路径：根到自身的 cascade_org_id 链，形如 /A/B/',
+    `cascade_org_id` VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '上报给上级的组织编码(20位)',
+    `org_name`       VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '上报名称',
+    `sort_order`     INT                                                   NOT NULL DEFAULT 0 COMMENT '同级排序',
+    `enabled`        TINYINT                                               NOT NULL DEFAULT 1 COMMENT '1上报 0不上报(整棵子树剪掉)',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_cascade_org_code` (`platform_id`, `cascade_org_id`) USING BTREE,
+    KEY `idx_cascade_org_parent` (`parent_org_id`) USING BTREE,
+    KEY `idx_cascade_org_path` (`platform_id`, `org_path`) USING BTREE
+) ENGINE = InnoDB
+  AUTO_INCREMENT = 1
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_bin COMMENT ='级联组织树表';
 
 
 -- ----------------------------

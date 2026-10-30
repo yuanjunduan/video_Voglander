@@ -1,6 +1,7 @@
 package io.github.lunasaw.voglander.web.api.cascade;
 
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,8 +19,11 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 
 import io.github.lunasaw.voglander.common.constant.ApiConstant;
 import io.github.lunasaw.voglander.common.domain.AjaxResult;
+import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeChannelMeta;
+import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeChannelMetaResolver;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadeChannelManager;
+import io.github.lunasaw.voglander.manager.manager.DeviceChannelManager;
 import io.github.lunasaw.voglander.web.api.cascade.assembler.CascadeWebAssembler;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelBatchBindReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelCreateReq;
@@ -50,6 +54,9 @@ public class CascadeChannelController {
 
     @Autowired
     private CascadeWebAssembler   cascadeWebAssembler;
+
+    @Autowired
+    private CascadeChannelMetaResolver channelMetaResolver;
 
     @PostMapping
     @Operation(summary = "新增级联通道映射")
@@ -86,25 +93,55 @@ public class CascadeChannelController {
     @Operation(summary = "查询级联通道详情")
     public AjaxResult<CascadeChannelVO> getById(@PathVariable Long id) {
         CascadeChannelDTO dto = cascadeChannelManager.getById(id);
-        return AjaxResult.success(CascadeChannelVO.convertVO(dto));
+        Map<String, CascadeChannelMeta> metaMap = dto == null
+            ? Map.of() : channelMetaResolver.resolve(List.of(dto));
+        return AjaxResult.success(toVO(dto, metaMap));
     }
 
     @PostMapping("/getPage")
-    @Operation(summary = "分页查询级联通道", description = "POST 条件分页，返回 total + items（VO，时间毫秒）")
+    @Operation(summary = "分页查询级联通道",
+        description = "POST 条件分页，返回 total + items（VO，时间毫秒）；includeSubOrg=true 时 cascadeOrgId 按整棵子树过滤")
     public AjaxResult<CascadeChannelListResp> getPage(
         @RequestBody(required = false) CascadeChannelPageReq pageReq,
         @RequestParam(defaultValue = "1") int page,
         @RequestParam(defaultValue = "10") int size) {
         CascadeChannelDTO query = cascadeWebAssembler.pageReqToQueryDto(pageReq);
-        Page<CascadeChannelDTO> dtoPage = cascadeChannelManager.getPage(query, page, size);
+        boolean includeSubOrg = pageReq != null && Boolean.TRUE.equals(pageReq.getIncludeSubOrg());
+        Page<CascadeChannelDTO> dtoPage = cascadeChannelManager.getPage(query, page, size, includeSubOrg);
 
-        List<CascadeChannelVO> items = dtoPage.getRecords().stream()
-            .map(CascadeChannelVO::convertVO)
+        List<CascadeChannelDTO> records = dtoPage.getRecords();
+        /* 五项目录元数据要显示“上级实际会收到什么”，因此按覆盖值+设备派生一次性合成，不展出库里的裸值 */
+        Map<String, CascadeChannelMeta> metaMap = channelMetaResolver.resolve(records);
+        List<CascadeChannelVO> items = records.stream()
+            .map(dto -> toVO(dto, metaMap))
             .collect(Collectors.toList());
 
         CascadeChannelListResp resp = new CascadeChannelListResp();
         resp.setTotal(dtoPage.getTotal());
         resp.setItems(items);
         return AjaxResult.success(resp);
+    }
+
+    /**
+     * DTO → VO，并用解析结果覆盖五项目录元数据。
+     *
+     * <p>直接展示库里的值会误导人：留空表示“自动派生”，页面必须看到派生后的真值。
+     */
+    private CascadeChannelVO toVO(CascadeChannelDTO dto, Map<String, CascadeChannelMeta> metaMap) {
+        CascadeChannelVO vo = CascadeChannelVO.convertVO(dto);
+        if (vo == null) {
+            return null;
+        }
+        CascadeChannelMeta meta = metaMap.get(
+            DeviceChannelManager.channelKey(dto.getLocalDeviceId(), dto.getLocalChannelId()));
+        if (meta == null) {
+            meta = CascadeChannelMeta.DEFAULT;
+        }
+        vo.setManufacturer(meta.manufacturer());
+        vo.setModel(meta.model());
+        vo.setAddress(meta.address());
+        vo.setIpAddress(meta.ipAddress());
+        vo.setPtzType(meta.ptzType());
+        return vo;
     }
 }

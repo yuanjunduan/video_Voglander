@@ -51,7 +51,31 @@ public class CascadeChannelUpdateReq implements Serializable {
     private String  cascadeName;
 
     /**
+     * 所属级联组织编码；传空串表示迁回平台根节点，传 null 表示不改。
+     */
+    private String  cascadeOrgId;
+
+    /**
      * 启用状态 1启用 / 0停用
      */
     private Integer enabled;
+
+    /**
+     * 目录项元数据（均选填）：传空串表示“改回自动派生”，传 null 表示不改。
+     *
+     * <p>与 cascadeOrgId 同一三态约定：{@code updateById} 跳过 null 字段，
+     * 想把已填的覆盖值改回自动，必须显式传空串。
+     */
+    private String  manufacturer;
+
+    private String  model;
+
+    private String  address;
+
+    private String  ipAddress;
+
+    /**
+     * 摄像机类型：1球机 / 2半球 / 3枪机；0 表示改回自动派生
+     */
+    private Integer ptzType;
 }

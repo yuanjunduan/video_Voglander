@@ -126,6 +126,12 @@ class TechnicalSchedulerArchitectureTest {
 
     private static Map<String, String> expectedSchedulers() {
         Map<String, String> schedulers = new LinkedHashMap<>();
+        schedulers.put("io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeCatalogPager",
+            "PROTOCOL");
+        schedulers.put("io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeMediaInviteListener",
+            "PROTOCOL");
+        schedulers.put("io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeNotifyAckTracker",
+            "PROTOCOL");
         schedulers.put("io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeRecordRequestScheduler",
             "PROTOCOL");
         schedulers.put("io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeSubscribeCleanScheduler",

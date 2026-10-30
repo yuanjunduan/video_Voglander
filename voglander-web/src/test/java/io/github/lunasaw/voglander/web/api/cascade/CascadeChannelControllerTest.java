@@ -19,6 +19,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 
+import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeChannelMetaResolver;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadeChannelManager;
 import io.github.lunasaw.voglander.web.api.cascade.assembler.CascadeWebAssembler;
@@ -36,6 +37,8 @@ class CascadeChannelControllerTest {
     CascadeChannelController controller;
     @Mock
     CascadeChannelManager   cascadeChannelManager;
+    @Mock
+    CascadeChannelMetaResolver channelMetaResolver;
     @Spy
     CascadeWebAssembler     cascadeWebAssembler = new CascadeWebAssembler();
 
@@ -43,6 +46,8 @@ class CascadeChannelControllerTest {
 
     @BeforeEach
     void setup() {
+        /* 旧用例不断言派生字段，留空即走兜底值，避免把派生规则重复写进控制器测试 */
+        lenient().when(channelMetaResolver.resolve(any())).thenReturn(java.util.Map.of());
         mvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 
@@ -94,7 +99,7 @@ class CascadeChannelControllerTest {
     @Test
     @DisplayName("分页：POST /getPage 委托 manager.getPage 并透传 platformId 过滤")
     void page_ok() throws Exception {
-        when(cascadeChannelManager.getPage(any(CascadeChannelDTO.class), eq(1), eq(20)))
+        when(cascadeChannelManager.getPage(any(CascadeChannelDTO.class), eq(1), eq(20), eq(false)))
             .thenReturn(new Page<>(1, 20));
         mvc.perform(post("/api/v1/cascade/channel/getPage")
             .param("page", "1").param("size", "20")
@@ -102,7 +107,23 @@ class CascadeChannelControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.data.total").value(0))
             .andExpect(jsonPath("$.data.items").isArray());
-        verify(cascadeChannelManager).getPage(argThat(d -> "p1".equals(d.getPlatformId())), eq(1), eq(20));
+        verify(cascadeChannelManager).getPage(argThat(d -> "p1".equals(d.getPlatformId())), eq(1), eq(20),
+            eq(false));
+    }
+
+    @Test
+    @DisplayName("分页：includeSubOrg=true 时透传给 manager，按整棵子树过滤")
+    void page_include_sub_org() throws Exception {
+        when(cascadeChannelManager.getPage(any(CascadeChannelDTO.class), eq(1), eq(20), eq(true)))
+            .thenReturn(new Page<>(1, 20));
+        mvc.perform(post("/api/v1/cascade/channel/getPage")
+            .param("page", "1").param("size", "20")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"platformId\":\"p1\",\"cascadeOrgId\":\"34020000002150000001\",\"includeSubOrg\":true}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.total").value(0));
+        verify(cascadeChannelManager).getPage(
+            argThat(d -> "34020000002150000001".equals(d.getCascadeOrgId())), eq(1), eq(20), eq(true));
     }
 
     @Test

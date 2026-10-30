@@ -54,9 +54,31 @@ public class CascadeChannelVO implements Serializable {
     private String  cascadeName;
 
     /**
+     * 所属级联组织编码（空 = 直接挂在平台根节点下）
+     */
+    private String  cascadeOrgId;
+
+    /**
      * 启用状态 1启用 / 0停用
      */
     private Integer enabled;
+
+    /**
+     * 以下五项是<b>最终上报值</b>（非单纯库值）：覆盖值优先，留空则由设备通道数据派生。
+     * 页面展示它才能核对上级将看到的目录内容。
+     */
+    private String  manufacturer;
+
+    private String  model;
+
+    private String  address;
+
+    private String  ipAddress;
+
+    /**
+     * 摄像机类型 1球机 2半球 3枪机
+     */
+    private Integer ptzType;
 
     /**
      * DTO → VO 转换（时间转 Unix 毫秒）。
@@ -77,7 +99,14 @@ public class CascadeChannelVO implements Serializable {
         vo.setLocalChannelId(dto.getLocalChannelId());
         vo.setCascadeChannelId(dto.getCascadeChannelId());
         vo.setCascadeName(dto.getCascadeName());
+        vo.setCascadeOrgId(dto.getCascadeOrgId());
         vo.setEnabled(dto.getEnabled());
+        /* 覆盖值先铺底；最终上报值由 Controller 叠加派生结果后回写这五项 */
+        vo.setManufacturer(dto.getManufacturer());
+        vo.setModel(dto.getModel());
+        vo.setAddress(dto.getAddress());
+        vo.setIpAddress(dto.getIpAddress());
+        vo.setPtzType(dto.getPtzType());
         return vo;
     }
 }

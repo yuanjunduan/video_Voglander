@@ -11,6 +11,7 @@ import io.github.lunasaw.voglander.manager.manager.CascadePlatformManager;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
@@ -28,6 +29,9 @@ public class CascadeClientRegisterListener {
     private final ApplicationEventPublisher eventPublisher;
     private final CascadeClientScheduler    cascadeClientScheduler;
     private final CascadeUnregisterService  cascadeUnregisterService;
+
+    /** 目录快照推送器软注入：{@code sip.client.enabled=false} 时该 Bean 不存在。 */
+    private final ObjectProvider<CascadeNotifyPublisher> notifyPublisherProvider;
 
     @EventListener
     public void onRegisterSuccess(ClientRegisterSuccessEvent event) {
@@ -56,6 +60,29 @@ public class CascadeClientRegisterListener {
         log.info("级联注册成功: eventUserId={}, platformId={}, localClientId={}, target={}:{}, peerProtocolVersion={}",
             eventUserId, platform.getPlatformId(), platform.getLocalClientId(),
             platform.getPlatformIp(), platform.getPlatformPort(), event.getPeerProtocolVersion());
+
+        pushCatalogSnapshotQuietly(platform.getPlatformId());
+    }
+
+    /**
+     * 注册成功后补推一次完整目录。
+     *
+     * <p>上级的 Catalog 订阅与本次 REGISTER 是两条独立链路：应用重启后上级手上的订阅可能仍在有效期，
+     * 不会马上重发 SUBSCRIBE，于是它握着空目录一直等到订阅过期。每轮 REGISTER（含续约）顺带推一包
+     * 全量目录，既能重启后立即恢复可见性，也让上级目录与本地配置定期对齐。
+     *
+     * <p>失败只记 warn：目录可见性不该反过来影响注册状态判定。
+     */
+    private void pushCatalogSnapshotQuietly(String platformId) {
+        CascadeNotifyPublisher publisher = notifyPublisherProvider.getIfAvailable();
+        if (publisher == null) {
+            return;
+        }
+        try {
+            publisher.pushCatalogSnapshot(platformId, null);
+        } catch (Exception e) {
+            log.warn("注册成功后补推目录快照失败: platformId={}, err={}", platformId, e.getMessage());
+        }
     }
 
     @EventListener

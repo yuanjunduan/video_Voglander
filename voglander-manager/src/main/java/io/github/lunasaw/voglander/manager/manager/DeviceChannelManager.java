@@ -226,6 +226,30 @@ public class DeviceChannelManager {
     }
 
     /**
+     * 批量取通道扩展信息原文（{@code tb_device_channel.extend}）。
+     *
+     * <p>级联目录要按通道派生厂商/型号/地址/IP/PTZ 类型，这些字段全在 extend 里：
+     * GB28181 通道是目录项 JSON（{@code channelInfo}），发现类通道是 {@code vendor/sourceModel/sourceIp}。
+     * 与 {@link #mapChannelStatus} 同样一次 {@code in(deviceId)} 取回，避免逐通道回表。
+     *
+     * @param deviceIds 设备国标 ID 集合
+     * @return key 为 {@link #channelKey}，value 为 extend 原文（可能为空串）
+     */
+    public Map<String, String> mapChannelExtend(Collection<String> deviceIds) {
+        if (deviceIds == null || deviceIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        LambdaQueryWrapper<DeviceChannelDO> qw = new LambdaQueryWrapper<>();
+        qw.select(DeviceChannelDO::getDeviceId, DeviceChannelDO::getChannelId, DeviceChannelDO::getExtend)
+            .in(DeviceChannelDO::getDeviceId, deviceIds);
+        Map<String, String> extendMap = new HashMap<>();
+        for (DeviceChannelDO channel : deviceChannelService.list(qw)) {
+            extendMap.put(channelKey(channel.getDeviceId(), channel.getChannelId()), channel.getExtend());
+        }
+        return extendMap;
+    }
+
+    /**
      * 分页查询设备通道DTO
      */
     public Page<DeviceChannelDTO> pageQuery(int page, int size, QueryWrapper<DeviceChannelDO> query) {

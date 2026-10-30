@@ -1,5 +1,6 @@
 package io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade;
 
+import gov.nist.javax.sip.DialogExt;
 import io.github.lunasaw.gb28181.common.entity.enums.InviteSessionNameEnum;
 import io.github.lunasaw.gb28181.common.entity.mansrtsp.ManSrtspRequest;
 import io.github.lunasaw.gb28181.common.entity.sdp.GbSessionDescription;
@@ -12,11 +13,13 @@ import io.github.lunasaw.gbproxy.server.enums.PlayActionEnums;
 import io.github.lunasaw.sip.common.enums.ContentTypeEnum;
 import io.github.lunasaw.sip.common.transmit.ResponseCmd;
 import io.github.lunasaw.sip.common.transmit.SipTransactionRegistry;
+import io.github.lunasaw.voglander.common.anno.TechnicalScheduler;
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.server.command.media.VoglanderServerMediaCommand;
 import io.github.lunasaw.voglander.intergration.wrapper.zlm.config.ZlmIntegrationConfig;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadeChannelManager;
 import io.github.lunasaw.zlm.api.ZlmRestService;
+import io.github.lunasaw.zlm.entity.MediaOnlineStatus;
 import io.github.lunasaw.zlm.entity.rtp.CloseSendRtpReq;
 import io.github.lunasaw.zlm.entity.rtp.StartSendRtpReq;
 import io.github.lunasaw.zlm.entity.rtp.StartSendRtpResult;
@@ -31,7 +34,17 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import jakarta.annotation.PreDestroy;
+
+import javax.sip.ClientTransaction;
+import javax.sip.Dialog;
+import javax.sip.DialogState;
+import javax.sip.ServerTransaction;
+import javax.sip.SipProvider;
+import javax.sip.message.Request;
 import javax.sip.message.Response;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -50,6 +63,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 @Slf4j
 @Component
+@TechnicalScheduler(category = TechnicalScheduler.Category.PROTOCOL)
 @ConditionalOnProperty(name = "sip.client.enabled", havingValue = "true")
 @RequiredArgsConstructor
 public class CascadeMediaInviteListener {
@@ -59,6 +73,10 @@ public class CascadeMediaInviteListener {
 
     @Autowired(required = false)
     private ZlmIntegrationConfig              zlmConfig;
+
+    /** 判活用的 ZLM 参数：与 LiveSessionGcService 一致（直播流统一落在 rtp app、rtsp 派生流可查） */
+    private static final String ZLM_PROBE_SCHEMA = "rtsp";
+    private static final String ZLM_PROBE_VHOST  = "__defaultVhost__";
 
     /** callId → 已应答但尚未收到 ACK 的会话（此时还没有推流）。 */
     private final ConcurrentHashMap<String, MediaSession> pendingSessions = new ConcurrentHashMap<>();
@@ -87,6 +105,27 @@ public class CascadeMediaInviteListener {
     @Value("${gateway.cascade.media.optimistic-push-delay-ms:2000}")
     private long optimisticPushDelayMs = 2000L;
 
+    /**
+     * 上级 INVITE 未携带 ssrc 时是否按国标规则生成。
+     *
+     * <p>海康 iSecure 部分版本下发 INVITE 不带 ssrc，此时回落成 "0" 会让上级按 ssrc 匹配 RTP 时
+     * 取不到流（ZLM 侧显示已推流、上级侧无画面）。默认开启；置 false 可退回旧行为。
+     */
+    @Value("${gateway.cascade.media.ssrc-fallback-enabled:true}")
+    private boolean ssrcFallbackEnabled = true;
+
+    /** 活跃会话空闲回收阈值（秒）：对齐参考实现 CSS 的 600s 会话超时 */
+    @Value("${gateway.cascade.media.active-idle-timeout-sec:600}")
+    private long activeIdleTimeoutSec = 600;
+
+    /** 活跃会话扫描间隔（毫秒） */
+    @Value("${gateway.cascade.media.active-scan-interval-ms:30000}")
+    private long activeScanIntervalMs = 30000;
+
+    /** 判活宽限期（秒）：会话刚建立时不参与对账，避开首播窗口竞态 */
+    @Value("${gateway.cascade.media.probe-grace-sec:30}")
+    private long probeGraceSec = 30;
+
     @EventListener
     @Async("sipNotifierExecutor")
     public void onInvite(ClientInviteEvent event) {
@@ -110,12 +149,22 @@ public class CascadeMediaInviteListener {
                 return; // 不是级联通道，不处理（可能是Lab设备）
             }
 
+            /* 语音对讲（s=Talk）暂不支持：它是 §9.2 点播 + §9.12 语音广播的组合，音频通道需真机联调。
+               误当实时视频拉流会占用发流端口且上级收不到音频，不如显式回 488 让上级快速失败 */
+            if (sdp.getSessionType() == InviteSessionNameEnum.TALK) {
+                log.warn("级联语音对讲暂不支持，回 488: callId={}, platformId={}, cascadeChannelId={}",
+                    callId, platformId, cascadeChannelId);
+                sendInviteStatus(event, Response.NOT_ACCEPTABLE_HERE);
+                return;
+            }
+
             boolean playback = isPlayback(sdp);
+            boolean download = sdp.getSessionType() == InviteSessionNameEnum.DOWNLOAD;
             /* 1. 向真实 IPC 拉流（实时 / 回放分支） */
             ensureStreamOnline(channel, sdp, playback);
 
             /* 2. 只做准备：确定推流目标与本地发送端口，startSendRtp 推迟到 ACK 之后 */
-            String ssrc = sdp.getSsrc() != null ? sdp.getSsrc() : "0";
+            String ssrc = resolveSsrc(sdp, channel, playback, callId);
             if (zlmConfig == null) {
                 log.error("无 ZLM 配置: callId={}", callId);
                 sendInviteError(event);
@@ -132,14 +181,14 @@ public class CascadeMediaInviteListener {
             int    srcPort   = allocateSendPort();
             int    dstPort   = sdp.getPort() != null ? sdp.getPort() : 10000;
             boolean udp      = sdp.getTransport() == null || !sdp.getTransport().name().contains("TCP");
-            pendingSessions.put(callId, new MediaSession(ssrc, channel.getLocalDeviceId(), userId, playback,
+            pendingSessions.put(callId, new MediaSession(ssrc, channel.getLocalDeviceId(), userId, playback, download,
                 zlmApp, zlmStream, sdp.getAddress(), dstPort, udp, srcPort));
 
             /* 3. 回包 200 OK：SDP 通告的端口即 ACK 后 startSendRtp 使用的 src_port */
             String localSendIp = hostOf(node.getHostPort());
-            sendInviteOk(event, userId, localSendIp, String.valueOf(srcPort), ssrc, sdp);
-            log.info("级联 INVITE 已应答，等待 ACK 后推流: callId={}, cascadeChannelId={}, playback={}, srcPort={}",
-                callId, cascadeChannelId, playback, srcPort);
+            sendInviteOk(event, userId, localSendIp, String.valueOf(srcPort), ssrc, sdp, pendingSessions.get(callId));
+            log.info("级联 INVITE 已应答，等待 ACK 后推流: callId={}, cascadeChannelId={}, playback={}, download={}, srcPort={}",
+                callId, cascadeChannelId, playback, download, srcPort);
 
         } catch (Exception e) {
             log.error("处理级联 INVITE 失败: callId={}", callId, e);
@@ -193,6 +242,7 @@ public class CascadeMediaInviteListener {
                 log.error("ZLM startSendRtp 失败: callId={}, srcPort={}, result={}", callId, session.srcPort, result);
                 return false;
             }
+            session.touch();
             activeSessions.put(callId, session);
             log.info("级联推流已启动: callId={}, ssrc={}, srcPort={} -> {}:{}, udp={}",
                 callId, session.ssrc, session.srcPort, session.dstUrl, session.dstPort, session.udp);
@@ -240,14 +290,89 @@ public class CascadeMediaInviteListener {
         }
     }
 
-    @EventListener
-    @Async("sipNotifierExecutor")
-    public void onBye(ClientByeEvent event) {
-        String callId = event.getCallId();
-        /* 尚未收到 ACK 就 BYE：会话从未推流，只需回收端口占用 */
-        pendingSessions.remove(callId);
+    /**
+     * 回收僵尸会话：以 ZLM 真实流状态为准 + 空闲超时双条件。
+     *
+     * <p>上级异常断开（进程崩溃、网络中断）不会发 BYE，{@link #activeSessions} 便永不释放，
+     * srcPort 泄漏累积后会命中「端口耗尽」告警并复用端口导致串流。参考实现 CSS 用的是
+     * 「MPS 会话状态查询 + 600s 超时 + 销毁时全停」三层兜底，这里等价地以 ZLM 判活作权威条件。
+     *
+     * <p>探活异常一律保守保留，宁可漏收一轮也不误杀正常流。
+     */
+    @Scheduled(fixedDelayString = "${gateway.cascade.media.active-scan-interval-ms:30000}")
+    public void reapStaleActiveSessions() {
+        if (activeSessions.isEmpty()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        for (Map.Entry<String, MediaSession> entry : activeSessions.entrySet()) {
+            String       callId  = entry.getKey();
+            MediaSession session = entry.getValue();
+
+            /* 1. 宽限期：刚建立不久的会话不参与对账，避开首播窗口竞态 */
+            if (now - session.createdAt < probeGraceSec * 1000L) {
+                continue;
+            }
+
+            /* 2. 权威判活：源流已从 ZLM 消失（拉流失败 / 设备掉线 / 被外部关闭） */
+            if (!isSourceStreamAlive(session)) {
+                stopSession(callId, "源流已消失", true);
+                continue;
+            }
+
+            /* 3. 兜底：长时间没有任何活动（上级仍在收流但不再发 INFO/BYE） */
+            long idleMs = now - session.lastActiveAt;
+            if (idleMs > activeIdleTimeoutSec * 1000L) {
+                stopSession(callId, "空闲超时 " + idleMs / 1000 + "s", true);
+            }
+        }
+    }
+
+    /**
+     * 源流是否还在 ZLM 上。
+     *
+     * <p>判活参数与 {@code LiveSessionGcService.streamAliveOnZlm} 一致（rtsp schema + rtp app）；
+     * 查询异常或响应缺 online 字段一律返回 true，交由下一轮再对。
+     */
+    private boolean isSourceStreamAlive(MediaSession session) {
+        if (zlmConfig == null) {
+            return true;
+        }
+        ZlmIntegrationConfig.ZlmServerConfig node = zlmConfig.getDefaultServer();
+        if (node == null) {
+            return true;
+        }
+        try {
+            Map<String, String> params = new LinkedHashMap<>();
+            params.put("schema", ZLM_PROBE_SCHEMA);
+            params.put("vhost", ZLM_PROBE_VHOST);
+            params.put("app", session.app);
+            params.put("stream", session.stream);
+            MediaOnlineStatus status = ZlmRestService.isMediaOnline(node.getHostPort(), node.getSecret(), params);
+            if (status == null || status.getOnline() == null) {
+                return true;
+            }
+            return Boolean.TRUE.equals(status.getOnline());
+        } catch (Exception e) {
+            log.warn("级联会话判活异常，本轮保守保留: stream={}, err={}", session.stream, e.getMessage());
+            return true;
+        }
+    }
+
+    /**
+     * 会话统一收尾：stopSendRtp + 出表 + 日志。BYE 与僵尸回收共用此入口。
+     *
+     * <p>幂等：以 {@link ConcurrentHashMap#remove(Object)} 的返回值决定是否真正停推，
+     * BYE 与扫描同刻命中时不会重复调用 ZLM。
+     *
+     * @param notifyUpper 是否向上级补发 BYE（附录 M）：仅限<b>本端主动</b>结束（源流消失/空闲超时）时发。
+     *                    上级发来的 BYE 不能回 BYE（那会变成一一回环），容器关闭时进程即将退出也不必发。
+     */
+    private void stopSession(String callId, String reason, boolean notifyUpper) {
         MediaSession session = activeSessions.remove(callId);
         if (session == null) {
+            /* 会话可能还停在 pending（未推流），一并清掉端口占用 */
+            pendingSessions.remove(callId);
             return;
         }
         try {
@@ -259,9 +384,42 @@ public class CascadeMediaInviteListener {
                     ZlmRestService.stopSendRtp(node.getHostPort(), node.getSecret(), req);
                 }
             }
-            log.info("级联 BYE 处理成功: callId={}", callId);
         } catch (Exception e) {
-            log.error("处理级联 BYE 失败: callId={}", callId, e);
+            log.warn("级联 stopSendRtp 失败: callId={}, ssrc={}, err={}", callId, session.ssrc, e.getMessage());
+        }
+        if (notifyUpper) {
+            /* 源流断了上级自己发现不了（它只是收不到 RTP），必须显式发 BYE 释放上级侧的会话 */
+            sendByeToUpper(callId, session);
+        }
+        log.info("级联会话收尾: callId={}, 原因={}, ssrc={}, srcPort={}",
+            callId, reason, session.ssrc, session.srcPort);
+    }
+
+    @EventListener
+    @Async("sipNotifierExecutor")
+    public void onBye(ClientByeEvent event) {
+        String callId = event.getCallId();
+        /* 尚未收到 ACK 就 BYE：会话从未推流，只需回收端口占用 */
+        pendingSessions.remove(callId);
+        stopSession(callId, "收到上级 BYE", false);
+    }
+
+    /**
+     * 容器关闭时停止全部推流。
+     *
+     * <p>不清理的话，进程重启后 ZLM 侧的 sendRtp 发送器仍在向原地址发流，上级会持续收到
+     * 半死不活的数据直到对端超时。对齐参考实现 CSS 的 {@code clearSessionsAndStopPush()}。
+     */
+    @PreDestroy
+    public void destroy() {
+        int activeCount  = activeSessions.size();
+        int pendingCount = pendingSessions.size();
+        for (String callId : new ArrayList<>(activeSessions.keySet())) {
+            stopSession(callId, "容器关闭", false);
+        }
+        pendingSessions.clear();
+        if (activeCount + pendingCount > 0) {
+            log.info("级联媒体监听已关闭: 停止推流 {} 个, 丢弃待推流会话 {} 个", activeCount, pendingCount);
         }
     }
 
@@ -279,11 +437,22 @@ public class CascadeMediaInviteListener {
             log.debug("INFO 无 MANSRTSP 解析体，忽略: userId={}", userId);
             return;
         }
-        MediaSession session = findPlaybackSessionByUserId(userId);
+        MediaSession session = findSessionByUserId(userId);
         if (session == null) {
             log.warn("回放控制找不到活跃会话: userId={}", userId);
             return;
         }
+        /* 录像下载（s=Download）会话不响应回放控制：下载是单向取流，收到 INFO 只会让它永远不被空闲回收 */
+        if (session.download) {
+            log.debug("下载会话忽略 MANSRTSP 控制: userId={}, method={}", userId, rtsp.getMethod());
+            return;
+        }
+        if (!session.playback) {
+            log.debug("非回放会话忽略 MANSRTSP 控制: userId={}", userId);
+            return;
+        }
+        /* 有回放控制交互说明上级仍在正常消费，刷新活动时间避免被空闲回收 */
+        session.touch();
         String localDeviceId = session.localDeviceId;
         String method = rtsp.getMethod() == null ? "" : rtsp.getMethod().toUpperCase();
         try {
@@ -318,12 +487,12 @@ public class CascadeMediaInviteListener {
         }
     }
 
-    private MediaSession findPlaybackSessionByUserId(String userId) {
+    private MediaSession findSessionByUserId(String userId) {
         if (userId == null) {
             return null;
         }
         return activeSessions.values().stream()
-            .filter(s -> s.playback && userId.equals(s.upperUserId))
+            .filter(s -> userId.equals(s.upperUserId))
             .findFirst()
             .orElse(null);
     }
@@ -367,6 +536,29 @@ public class CascadeMediaInviteListener {
         }
     }
 
+    /**
+     * 决定本次会话的 SSRC：上级带了就原样回显，没带则按国标规则生成。
+     *
+     * <p>回落成 "0" 会让上级按 ssrc 匹配 RTP 时取不到整路流，因此除显式关闭兜底外都必须给出
+     * 一个合法值（规则见 {@link CascadeSsrcGenerator}）。
+     */
+    private String resolveSsrc(GbSessionDescription sdp, CascadeChannelDTO channel, boolean playback, String callId) {
+        String upstream = sdp.getSsrc();
+        if (StringUtils.isNotBlank(upstream)) {
+            return upstream.trim();
+        }
+        if (!ssrcFallbackEnabled) {
+            log.warn("上级 INVITE 未携带 ssrc 且兜底生成已关闭，按 0 继续（上级可能收不到流）: callId={}", callId);
+            return "0";
+        }
+        /* 级联通道编码是 20 位国标编码，前 8 位与平台域同源，取 [4..9] 即 CSS 的 sipId[4:9] 语义 */
+        String ssrc = CascadeSsrcGenerator.generate(
+            channel.getCascadeChannelId(), channel.getLocalChannelId(), playback);
+        log.info("级联 INVITE 未携带 ssrc，已生成: callId={}, ssrc={}, localChannelId={}, playback={}",
+            callId, ssrc, channel.getLocalChannelId(), playback);
+        return ssrc;
+    }
+
     private StartSendRtpReq buildStartSendRtpReq(MediaSession session) {
         StartSendRtpReq req = new StartSendRtpReq();
         req.setApp(session.app);
@@ -407,9 +599,14 @@ public class CascadeMediaInviteListener {
     /**
      * 回 200 OK 带本端发流 SDP（sendonly）。实时用 {@link InviteResponseEntity#getAckPlayBody}，
      * 回放用 {@code getAckPlayBackBody}（携带回放时间窗）。
+     *
+     * <p>回包后立即抓取 UAS 对话（{@code serverTransaction.getDialog()}）并记到会话上：
+     * 附录 M 要求源流异常结束时由发送方向接收方发 BYE，而构 BYE 必须走已建立的对话（
+     * {@code dialog.createRequest(BYE)} 自带 From/To tag / CSeq / Route Set），
+     * 事务上下文只有 32s 有效期，不能等到收尾时再取。
      */
     private void sendInviteOk(ClientInviteEvent event, String userId, String sendIp, String sendPort,
-        String ssrc, GbSessionDescription upSdp) {
+        String ssrc, GbSessionDescription upSdp, MediaSession session) {
         SipTransactionRegistry.TransactionContextInfo ctx =
             SipTransactionRegistry.getContext(event.getTransactionContextKey());
         if (ctx == null) {
@@ -429,6 +626,63 @@ public class CascadeMediaInviteListener {
         ResponseCmd.sendResponse(Response.OK, sdpBody,
             ContentTypeEnum.APPLICATION_SDP.getContentTypeHeader(),
             ctx.getOriginalEvent(), ctx.getServerTransaction());
+        if (session != null) {
+            session.serverTransaction = ctx.getServerTransaction();
+            session.dialog = dialogOf(ctx.getServerTransaction());
+            if (session.dialog == null) {
+                log.debug("200 OK 后尚未拿到 UAS 对话，收尾时再尝试: callId={}", event.getCallId());
+            }
+        }
+    }
+
+    /** 回指定状态码（如语音对讲的 488），不携带 SDP。 */
+    private void sendInviteStatus(ClientInviteEvent event, int status) {
+        SipTransactionRegistry.TransactionContextInfo ctx =
+            SipTransactionRegistry.getContext(event.getTransactionContextKey());
+        if (ctx != null) {
+            ResponseCmd.sendResponse(status, ctx.getOriginalEvent(), ctx.getServerTransaction());
+        }
+    }
+
+    /** 取 JAIN-SIP 对话：UA S 侧在 2xx 发出后由栈创建，取不到时返回 null。 */
+    private Dialog dialogOf(ServerTransaction transaction) {
+        if (transaction == null) {
+            return null;
+        }
+        try {
+            return transaction.getDialog();
+        } catch (Exception e) {
+            log.debug("取 SIP 对话失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 向上级发送 BYE（附录 M）。
+     *
+     * <p><b>不能用 {@code ClientCommandSender.sendByeCommand}</b>：它走 {@code DialogRegistry}，
+     * 而那里只登记本端<b>主动发起的出站</b> INVITE/SUBSCRIBE 对话；上级发起的 INVITE 是入站对话，
+     * 不在表内，会直接抛 {@code DialogNotFoundException}。
+     */
+    private void sendByeToUpper(String callId, MediaSession session) {
+        Dialog dialog = session.dialog != null ? session.dialog : dialogOf(session.serverTransaction);
+        if (dialog == null) {
+            log.warn("拿不到对话上下文，跳过向上级发送 BYE: callId={}", callId);
+            return;
+        }
+        try {
+            if (dialog.getState() != DialogState.CONFIRMED) {
+                log.debug("对话未确认，不发 BYE: callId={}, state={}", callId, dialog.getState());
+                return;
+            }
+            Request bye = dialog.createRequest(Request.BYE);
+            SipProvider provider = ((DialogExt) dialog).getSipProvider();
+            ClientTransaction ct = provider.getNewClientTransaction(bye);
+            dialog.sendRequest(ct);
+            log.info("已向上级发送 BYE 结束媒体会话: callId={}", callId);
+        } catch (Exception e) {
+            log.warn("向上级发送 BYE 失败: callId={}, err={}", callId, e.getMessage());
+        }
     }
 
     private void sendInviteError(ClientInviteEvent event) {
@@ -503,10 +757,24 @@ public class CascadeMediaInviteListener {
         }
     }
 
+    /**
+     * ssrc 转 int 供 ZLM {@code startSendRtp}/{@code stopSendRtp} 使用。
+     *
+     * <p>国标 ssrc 是 10 位十进制且首位为 0/1，正常不会溢出；但上级可能下发非规范值，旧实现用
+     * {@code Integer.parseInt} 会静默回落 0（等价于丢流）。改为 long 解析并告警，保留低 32 位。
+     */
     private int parseSsrc(String ssrc) {
+        if (StringUtils.isBlank(ssrc)) {
+            return 0;
+        }
         try {
-            return Integer.parseInt(ssrc);
-        } catch (Exception e) {
+            long value = Long.parseLong(ssrc.trim());
+            if (value < 0 || value > 0xFFFFFFFFL) {
+                log.warn("级联 ssrc 超出 uint32 范围，按低 32 位截断: {}", ssrc);
+            }
+            return (int) (value & 0xFFFFFFFFL);
+        } catch (NumberFormatException e) {
+            log.warn("级联 ssrc 非数字，回落 0: {}", ssrc);
             return 0;
         }
     }
@@ -543,6 +811,8 @@ public class CascadeMediaInviteListener {
         final String  upperUserId;
         /** 是否回放会话 */
         final boolean playback;
+        /** 是否录像下载会话（s=Download）：单向取流，不响应 MANSRTSP 控制 */
+        final boolean download;
         /** ZLM 应用名 */
         final String  app;
         /** ZLM 流 ID：本端设备_通道 */
@@ -558,12 +828,22 @@ public class CascadeMediaInviteListener {
         /** 会话建立时间，用于回收迟迟等不到 ACK 的待推流会话 */
         final long    createdAt;
 
-        MediaSession(String ssrc, String localDeviceId, String upperUserId, boolean playback,
+        /** 最近一次活动时间（推流建立 / 回放控制），用于空闲超时回收 */
+        volatile long lastActiveAt;
+
+        /** 入站 INVITE 建立的 UAS 事务：取不到对话时的兼底，也是发 BYE 的唯一依据 */
+        volatile ServerTransaction serverTransaction;
+
+        /** 入站 INVITE 建立的 UAS 对话：本端主动收尾时用它构 BYE */
+        volatile Dialog            dialog;
+
+        MediaSession(String ssrc, String localDeviceId, String upperUserId, boolean playback, boolean download,
             String app, String stream, String dstUrl, int dstPort, boolean udp, int srcPort) {
             this.ssrc = ssrc;
             this.localDeviceId = localDeviceId;
             this.upperUserId = upperUserId;
             this.playback = playback;
+            this.download = download;
             this.app = app;
             this.stream = stream;
             this.dstUrl = dstUrl;
@@ -571,6 +851,12 @@ public class CascadeMediaInviteListener {
             this.udp = udp;
             this.srcPort = srcPort;
             this.createdAt = System.currentTimeMillis();
+            this.lastActiveAt = this.createdAt;
+        }
+
+        /** 刷新活动时间：推流真正启动、收到回放控制时调用，避免被空闲回收误杀。 */
+        void touch() {
+            this.lastActiveAt = System.currentTimeMillis();
         }
     }
 }

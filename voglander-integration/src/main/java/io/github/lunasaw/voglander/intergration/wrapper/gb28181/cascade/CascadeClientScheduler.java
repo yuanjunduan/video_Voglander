@@ -19,6 +19,8 @@ import org.springframework.stereotype.Component;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 
+import io.github.lunasaw.gb28181.common.entity.enums.CmdTypeEnum;
+import io.github.lunasaw.gb28181.common.entity.notify.DeviceKeepLiveNotify;
 import io.github.lunasaw.gbproxy.client.transmit.cmd.ClientCommandSender;
 import io.github.lunasaw.sip.common.entity.FromDevice;
 import io.github.lunasaw.sip.common.entity.ToDevice;
@@ -378,7 +380,12 @@ public class CascadeClientScheduler {
             }
             FromDevice from = cascadeDeviceSupplier.buildFromDevice(platform);
             ToDevice   to   = cascadeDeviceSupplier.buildToDevice(platform);
-            ClientCommandSender.sendKeepaliveCommand(from, to, platform.getLocalClientId());
+            /* Status 按 GB28181 只能取 ON/OFF/OK：框架的 sendKeepaliveCommand(from,to,deviceId) 会把
+               平台编码填进 <Status>，海康虽回 200，但其网关按状态值判「下级域离线」，检索任务直接拒下。 */
+            DeviceKeepLiveNotify keepalive = new DeviceKeepLiveNotify(CmdTypeEnum.KEEPALIVE.getType(),
+                String.valueOf(System.currentTimeMillis() % 1_000_000), from.getUserId());
+            keepalive.setStatus("ON");
+            ClientCommandSender.sendKeepaliveCommand(from, to, keepalive);
             log.debug("级联保活已发送: platformId={}, target={}:{}",
                 platform.getPlatformId(), platform.getPlatformIp(), platform.getPlatformPort());
         } catch (Exception e) {

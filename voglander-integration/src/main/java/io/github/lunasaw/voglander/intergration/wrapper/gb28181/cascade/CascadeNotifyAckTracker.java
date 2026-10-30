@@ -8,6 +8,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import lombok.extern.slf4j.Slf4j;
+import io.github.lunasaw.voglander.common.anno.TechnicalScheduler;
 
 /**
  * 出站推送的送达确认与一次性重发。
@@ -25,6 +26,7 @@ import lombok.extern.slf4j.Slf4j;
  */
 @Slf4j
 @Component
+@TechnicalScheduler(category = TechnicalScheduler.Category.PROTOCOL)
 public class CascadeNotifyAckTracker {
 
     /** callId → 待确认推送 */

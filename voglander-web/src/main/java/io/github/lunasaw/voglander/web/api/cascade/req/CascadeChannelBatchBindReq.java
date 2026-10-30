@@ -27,6 +27,14 @@ public class CascadeChannelBatchBindReq implements Serializable {
     private String          platformId;
 
     /**
+     * 这批通道统一挂到的级联组织编码（选填，空=挂平台根节点）。
+     *
+     * <p>批量绑定通常就是"把一批通道挂到某个组织下"，因此放在批次层；
+     * 个别通道要挂别处时用单条绑定接口。
+     */
+    private String          cascadeOrgId;
+
+    /**
      * 待绑定通道列表
      */
     private List<BindItem>  channels;

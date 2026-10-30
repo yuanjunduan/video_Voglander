@@ -8,6 +8,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import io.github.lunasaw.voglander.common.event.AlarmCreatedEvent;
+import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
 import io.github.lunasaw.voglander.common.event.LocalChannelChangeEvent;
 import io.github.lunasaw.voglander.common.event.LocalMobilePositionEvent;
 import lombok.RequiredArgsConstructor;
@@ -49,6 +50,20 @@ public class CascadeEventBridge {
     @Async("sipNotifierExecutor")
     public void onChannelChange(LocalChannelChangeEvent e) {
         notifyPublisher.pushCatalogChange(e.getDeviceId(), e.getChannelId(), e.getEvent());
+    }
+
+    /**
+     * 组织结构变化（组织增删改 / 通道换组织）→ 重推整棵目录快照。
+     *
+     * <p>这类变化动的是父子关系，一次 {@code Catalog Event} 只能带一个节点，
+     * 上级无法据此把节点挂到新父节点下，会留下孤儿条目。快照重推能保证父子一致。
+     */
+    @EventListener
+    @Async("sipNotifierExecutor")
+    public void onCatalogStructureChange(LocalCascadeCatalogChangeEvent e) {
+        log.info("级联目录结构变更，重推快照: platformId={}, scope={}, cascadeId={}, event={}",
+            e.getPlatformId(), e.getScope(), e.getCascadeId(), e.getEvent());
+        notifyPublisher.pushCatalogSnapshot(e.getPlatformId(), null);
     }
 
     @EventListener

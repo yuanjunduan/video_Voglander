@@ -34,4 +34,17 @@ public class CascadeChannelPageReq implements Serializable {
      * 级联通道编码（精确匹配）
      */
     private String cascadeChannelId;
+
+    /**
+     * 所属级联组织编码
+     */
+    private String cascadeOrgId;
+
+    /**
+     * 是否把子组织下的通道一并纳入（默认 false，只取直属该组织的通道）。
+     *
+     * <p>置 true 时 {@code cascadeOrgId} 变成"子树过滤"：组织树有多少层都能一次查全，
+     * 前端不必逐层请求。此时必须同时给 {@code platformId}（编码只在平台内唯一）。
+     */
+    private Boolean includeSubOrg;
 }

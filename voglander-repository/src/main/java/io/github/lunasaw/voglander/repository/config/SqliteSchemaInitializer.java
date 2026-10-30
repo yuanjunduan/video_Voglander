@@ -79,6 +79,12 @@ public class SqliteSchemaInitializer {
     @Autowired(required = false)
     private SqliteBusinessTaskSchemaMigrator businessTaskSchemaMigrator;
 
+    @Autowired(required = false)
+    private SqliteCascadeOrgSchemaMigrator cascadeOrgSchemaMigrator;
+
+    @Autowired(required = false)
+    private SqliteCascadeChannelMetaSchemaMigrator cascadeChannelMetaSchemaMigrator;
+
     /**
      * 启动时按需初始化 SQLite schema。非 SQLite 跳过；已建全库跳过。
      * <p>
@@ -105,6 +111,8 @@ public class SqliteSchemaInitializer {
                 verifyLegacySchemaComplete();
                 migrateBusinessTaskSchema();
                 migrateImageSchema();
+                migrateCascadeOrgSchema();
+                migrateCascadeChannelMetaSchema();
                 verifySchemaComplete();
                 log.debug("SQLite 已存在 sentinel 表 {} 且迁移后表数达标，跳过全量建表", SENTINEL_TABLE);
                 return;
@@ -122,6 +130,8 @@ public class SqliteSchemaInitializer {
             // 空库全量脚本已含图像表；仍运行幂等 migration 以登记 history 并验证关键索引。
             migrateBusinessTaskSchema();
             migrateImageSchema();
+            migrateCascadeOrgSchema();
+            migrateCascadeChannelMetaSchema();
             verifySchemaComplete();
             log.info("SQLite schema 初始化完成（建表 {} 张 + 默认 admin/角色/菜单种子）", EXPECTED_TABLE_COUNT);
         } catch (RuntimeException e) {
@@ -169,6 +179,37 @@ public class SqliteSchemaInitializer {
         SqliteBusinessTaskSchemaMigrator migrator = businessTaskSchemaMigrator;
         if (migrator == null) {
             migrator = new SqliteBusinessTaskSchemaMigrator();
+            migrator.setDataSource(dataSource);
+        }
+        migrator.migrate();
+    }
+
+    /**
+     * 级联组织树与 {@code org_path} 的幂等补齐。
+     *
+     * <p>这两项 1.0.11 的增量此前只提供手工脚本，老库升级后 {@code SELECT *} 会因缺列直接报错；
+     * 放到启动链路里才不会出现"能建组织、一查通道就 500"的半升级库。
+     */
+    private void migrateCascadeOrgSchema() {
+        SqliteCascadeOrgSchemaMigrator migrator = cascadeOrgSchemaMigrator;
+        if (migrator == null) {
+            migrator = new SqliteCascadeOrgSchemaMigrator();
+            migrator.setDataSource(dataSource);
+        }
+        migrator.migrate();
+    }
+
+    /**
+     * 级联通道目录元数据列的幂等补齐（1.0.12：厂商/型号/地址/IP/摄像机类型）。
+     *
+     * <p>不放进迁移历史就跳过的判断：老库升级后缺列会在“新增通道”和目录组装时报
+     * {@code no such column}，而建表脚本只对空库生效，故每次启动都验一遍（代价是 5 次
+     * {@code pragma_table_info} 查询）。
+     */
+    private void migrateCascadeChannelMetaSchema() {
+        SqliteCascadeChannelMetaSchemaMigrator migrator = cascadeChannelMetaSchemaMigrator;
+        if (migrator == null) {
+            migrator = new SqliteCascadeChannelMetaSchemaMigrator();
             migrator.setDataSource(dataSource);
         }
         migrator.migrate();
