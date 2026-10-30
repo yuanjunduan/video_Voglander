@@ -1,15 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<configuration scan="true" scanPeriod="5 seconds">
+<!-- scan 必须保持关闭：本文件通过 springProperty 读取 spring.application.name，
+     热重载时该 Spring 属性已不在 context 中，${log.dir} 会退化为空路径，
+     RollingFileAppender 重新初始化失败后静默丢弃全部日志（表现为日志文件停更、控制台仍有输出）。
+     如需改日志级别，请用 /actuator/loggers 或重启，不要依赖热重载。 -->
+<configuration scan="false">
     <!--定义日志文件的存储地址 -->
     <springProperty scope="context" name="spring.application.name" source="spring.application.name" defaultValue="voglander"/>
     <Property name="application.name" value="${spring.application.name}"/>
     <property name="log.dir" value="${user.home}/logs/${application.name}"/>
 
+    <!-- 未被引用：所有 appender 实际用的是下面的 ${pattern}（%tid 由 SkyWalking layout 解释），
+         改动这里的 log.pattern 不会影响输出，保留仅为兼容历史配置 -->
     <substitutionProperty name="log.pattern"
                           value="%clr(%d{yyyy-MM-dd HH:mm:ss.SSS,GMT+8}){faint} %clr(%5p) %clr(---){faint} %clr(%-1.30logger{0}){cyan} %clr(:){faint} %X{traceId} %X{deviceId} %m%n%wEx"/>
 
+    <!-- traceId 由 TraceFilter 写入 MDC（key=traceId），这里输出后即可按同一 ID 串联「前端一次操作 → 后端全链路」；
+         未经过 HTTP 过滤器的线程（SIP、定时任务）显示为空，属预期 -->
     <property name="pattern"
-              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%tid] [%thread] %-5level %logger{36} -%msg%n"/>
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%tid] [traceId=%X{traceId:--}] [%thread] %-5level %logger{36} - %msg%n"/>
 
     <conversionRule conversionWord="clr" converterClass="org.springframework.boot.logging.logback.ColorConverter"/>
     <conversionRule conversionWord="wex"

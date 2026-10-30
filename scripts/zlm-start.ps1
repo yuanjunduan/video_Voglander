@@ -95,7 +95,7 @@ Write-Step "5. DB check (tb_media_node)"
 if (Get-Command python -ErrorAction SilentlyContinue) {
     $code = @"
 import pymysql
-c = pymysql.connect(host='192.168.118.20', port=3306, user='root', password='123456', database='voglander', charset='utf8mb4')
+c = pymysql.connect(host='192.168.118.229', port=3306, user='root', password='123456', database='voglander', charset='utf8mb4')
 cur = c.cursor()
 cur.execute('select server_id, host, secret, status, enabled, weight, keepalive from tb_media_node')
 rows = cur.fetchall()

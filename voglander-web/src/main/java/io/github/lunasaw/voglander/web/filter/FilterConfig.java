@@ -59,7 +59,8 @@ public class FilterConfig {
         registration.setFilter(new TraceFilter());
         registration.addUrlPatterns("/*");
         registration.setName("traceFilter");
-        registration.setOrder(FilterRegistrationBean.LOWEST_PRECEDENCE);
+        /* traceId 要覆盖尽可能多的日志，因此紧跟在 xssFilter 之后执行，而不是排到最后 */
+        registration.setOrder(FilterRegistrationBean.HIGHEST_PRECEDENCE + 10);
         return registration;
     }
 

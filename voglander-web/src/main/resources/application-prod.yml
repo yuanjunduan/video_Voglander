@@ -63,9 +63,20 @@ local:
     secret: zlm
 
 # 协议验证台：dev profile 默认开启，激活 LabClientController + Lab*Listener
+#
+# 【级联对接期间必须为 false】本开关与真实级联互斥，打开会让上级平台看不到任何通道：
+#   1. CascadeQueryHandler / CascadeSubscribeHandler 的装配条件是
+#      "${sip.client.enabled:false} and not ${voglander.protocol-lab.enabled:false}"，
+#      本值为 true 时二者不注册，级联目录查询/订阅无人应答；
+#   2. QueryListener 由 LabQueryListener 顶替（全局唯一），它只认 Lab 自己的 clientId
+#      （34020000001320000011）及其通道，上级查目录时 DeviceID 是平台域
+#      （34020000002000000001），被 isLabDevice() 判否后直接 return null，连错误都不回。
+#   3. 现象特征：REGISTER/心跳照常成功（走 CascadeClientScheduler，不受此条件限制），
+#      但日志中没有「响应目录查询」，上级侧目录恒空 → 表现为「注册成功但看不到设备」。
+# 需要做协议自环验证时再临时开启，验证完关回去并重启。
 voglander:
   protocol-lab:
-    enabled: true
+    enabled: false
     # Lab 客户端 digest 密码（独立于 sip.client.password，便于联调单独覆盖）；留空回退 sip.client.password
     device-password: "123456"
     # 模拟推流：ffmpeg 把视频按 TS-over-RTP 推到平台 ZLM 收流口，完成媒体闭环

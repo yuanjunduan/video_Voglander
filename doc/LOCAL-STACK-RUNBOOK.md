@@ -18,7 +18,7 @@
                        ▼
         ┌──────────────────────────────────┐        ┌─────────────────────┐
         │ voglander  ApplicationWeb :8181  │◄──────►│ MySQL 3306 / Redis   │
-        │  · REST /api/v1/**               │  JDBC  │ 192.168.118.20      │
+        │  · REST /api/v1/**               │  JDBC  │ 192.168.118.229     │
         │  · Hook  /index/hook/**          │  /缓存 │ (库 voglander, db13) │
         │  · SSE   /api/v1/sse/**          │        └─────────────────────┘
         │  · SIP 服务端 :5060 (进程内)      │
@@ -42,8 +42,8 @@
 
 | 端口 | 协议 | 承载进程 | 作用 | 必需 |
 |---|---|---|---|---|
-| 3306 | MySQL | `192.168.118.20`（远程） | 主库 `voglander` | ✅ |
-| 6380 | Redis | `192.168.118.20`（远程） | 缓存，`database: 13`，无密码 | ✅ |
+| 3306 | MySQL | `192.168.118.229`（远程） | 主库 `voglander` | ✅ |
+| 6380 | Redis | `192.168.118.229`（远程） | 缓存，`database: 13`，无密码 | ✅ |
 | 8181 | HTTP | `java`（voglander） | 业务 API、Hook 接收、SSE、静态 `index.html`、swagger | ✅ |
 | 5060 | UDP SIP | voglander 同一 JVM | GB28181 服务端（设备注册上来） | ✅ |
 | 5061 | UDP SIP | voglander 同一 JVM | GB28181 客户端（级联注册到上级） | ✅ |
@@ -81,17 +81,17 @@
 
 | 项 | 值 |
 |---|---|
-| MySQL | `192.168.118.20:3306`，库 `voglander`，`root/123456` |
-| Redis | `192.168.118.20:6380`，无密码，`database: 13` |
+| MySQL | `192.168.118.229:3306`，库 `voglander`，`root/123456` |
+| Redis | `192.168.118.229:6380`，无密码，`database: 13` |
 | 配置文件 | `voglander-repository/src/main/resources/application-repo.yml` |
 
 验证：
 
 ```powershell
-Test-NetConnection 192.168.118.20 -Port 3306 -InformationLevel Quiet
-Test-NetConnection 192.168.118.20 -Port 6380 -InformationLevel Quiet
+Test-NetConnection 192.168.118.229 -Port 3306 -InformationLevel Quiet
+Test-NetConnection 192.168.118.229 -Port 6380 -InformationLevel Quiet
 # 本机无 mysql CLI，可用 python + pymysql
-python -c "import pymysql;c=pymysql.connect(host='192.168.118.20',port=3306,user='root',password='123456',database='voglander',charset='utf8mb4');cur=c.cursor();cur.execute('select count(*) from tb_media_node');print(cur.fetchall());c.close()"
+python -c "import pymysql;c=pymysql.connect(host='192.168.118.229',port=3306,user='root',password='123456',database='voglander',charset='utf8mb4');cur=c.cursor();cur.execute('select count(*) from tb_media_node');print(cur.fetchall());c.close()"
 ```
 
 ⚠️ `spring.cache.type: redis` 必须保留。缺了它 `sip-common` 的 `ConcurrentMapCacheManager` 会顶替成唯一 `CacheManager`，表现为 `Cannot find cache named 'device'`。
@@ -289,7 +289,7 @@ Invoke-RestMethod http://127.0.0.1:8181/api/v1/health
 # 3) ZLM 配置基线
 Invoke-RestMethod "http://127.0.0.1:8082/index/api/getServerConfig?secret=zlm"
 # 4) 节点入库 + 心跳在动
-python -c "import pymysql;c=pymysql.connect(host='192.168.118.20',port=3306,user='root',password='123456',database='voglander',charset='utf8mb4');cur=c.cursor();cur.execute('select server_id,host,secret,status,enabled,keepalive from tb_media_node');print(cur.fetchall());c.close()"
+python -c "import pymysql;c=pymysql.connect(host='192.168.118.229',port=3306,user='root',password='123456',database='voglander',charset='utf8mb4');cur=c.cursor();cur.execute('select server_id,host,secret,status,enabled,keepalive from tb_media_node');print(cur.fetchall());c.close()"
 # 5) starter REST 通道
 Invoke-RestMethod http://127.0.0.1:8081/zlm/api/version
 # 6) 前端 → 后端 代理

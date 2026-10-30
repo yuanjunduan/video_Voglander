@@ -13,7 +13,7 @@ spring:
         master:
           type: com.zaxxer.hikari.HikariDataSource
           driver-class-name: com.mysql.cj.jdbc.Driver
-          url: jdbc:mysql://192.168.118.20:3306/voglander?allowPublicKeyRetrieval=true&useUnicode=true&useSSL=false&serverTimezone=Asia/Shanghai
+          url: jdbc:mysql://192.168.118.229:3306/voglander?allowPublicKeyRetrieval=true&useUnicode=true&useSSL=false&serverTimezone=Asia/Shanghai
           username: root
           password: 123456
           # PostgreSQL 配置示例（取消注释并修改连接信息）
@@ -36,7 +36,7 @@ spring:
 # redis
   data:
     redis:
-      host: 192.168.118.20
+      host: 192.168.118.229
       port: 6380
       password:  # Redis 没有密码，留空
       client-name: voglander
