@@ -1,5 +1,11 @@
 # Repository Guidelines
 
+> **Start here**: read `doc/AGENT-CONTEXT.md` first. It carries the project mental model that
+is not derivable from the code quickly: module boundaries, the cascade (upstream GB28181) domain
+rules, `enabled` vs upstream-`effective` visibility, the exact build/test commands that work on
+this machine (JDK pinning, PowerShell quoting, `-am`), the out-of-workspace frontend workflow, and
+a numbered list of already-paid-for mistakes. Keep it updated when a structural rule changes.
+
 ## Project Structure & Module Organization
 
 Voglander is a Java 17/Spring Boot multi-module platform. `voglander-web` owns HTTP/SSE entry points; `voglander-service` domain and live-stream orchestration; `voglander-manager` templates, event sharding, coordination, and node routing; `voglander-repository` persistence/cache. External adapters belong in `voglander-integration`; shared contracts/utilities in `voglander-client` and `voglander-common`.
