@@ -147,6 +147,23 @@ class CascadeOrgManagerTest extends BaseTest {
 
             assertEquals(1, cascadeOrgManager.tree(platformId).get(0).getChannelCount());
         }
+
+        @Test
+        @DisplayName("子组织排序值更小、排在父组织之前时仍能正确挂树")
+        void should_attach_child_listed_before_parent() {
+            String platformId = UniqueKeyFactory.deviceId();
+            CascadeOrgDTO parent = org(platformId, null, "一层");
+            parent.setSortOrder(9);
+            Long parentId = cascadeOrgManager.add(parent);
+            CascadeOrgDTO child = org(platformId, parentId, "二层");
+            child.setSortOrder(0);
+            cascadeOrgManager.add(child);
+
+            List<CascadeOrgDTO> roots = cascadeOrgManager.tree(platformId);
+
+            assertEquals(1, roots.size(), "只能有一个根");
+            assertEquals(1, roots.get(0).getChildren().size(), "子组织必须挂在父节点下，不能因遍历顺序丢失");
+        }
     }
 
     @Nested
@@ -487,6 +504,127 @@ class CascadeOrgManagerTest extends BaseTest {
             query.setCascadeOrgId("34020000002159999999");
 
             assertEquals(0, cascadeChannelManager.getPage(query, 1, 10, true).getTotal());
+        }
+    }
+
+    @Nested
+    @DisplayName("move - 移动组织")
+    class Move {
+
+        @Test
+        @DisplayName("整棵子树的父节点与物化路径一起重写，编码不变")
+        void should_rewrite_whole_subtree() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long rootId = cascadeOrgManager.add(org(platformId, null, "一层"));
+            Long midId = cascadeOrgManager.add(org(platformId, rootId, "二层"));
+            Long leafId = cascadeOrgManager.add(org(platformId, midId, "三层"));
+            Long targetId = cascadeOrgManager.add(org(platformId, null, "另一棵树的根"));
+
+            CascadeOrgDTO rootBefore = cascadeOrgManager.getById(rootId);
+            String midCode = cascadeOrgManager.getById(midId).getCascadeOrgId();
+            String leafCode = cascadeOrgManager.getById(leafId).getCascadeOrgId();
+            String targetPath = cascadeOrgManager.getById(targetId).getOrgPath();
+
+            assertTrue(cascadeOrgManager.move(midId, targetId));
+
+            CascadeOrgDTO mid = cascadeOrgManager.getById(midId);
+            CascadeOrgDTO leaf = cascadeOrgManager.getById(leafId);
+            assertEquals(targetId, mid.getParentOrgId());
+            assertEquals(midCode, mid.getCascadeOrgId(), "编码是上级建树的键，移动时绝不能变");
+            assertEquals(targetPath + midCode + "/", mid.getOrgPath());
+            assertEquals(mid.getOrgPath() + leafCode + "/", leaf.getOrgPath(), "孙节点路径必须跟着重写");
+            assertEquals(rootBefore.getOrgPath(), cascadeOrgManager.getById(rootId).getOrgPath(),
+                "原父那一支的路径不受影响");
+        }
+
+        @Test
+        @DisplayName("移到平台根节点：父节点置空，路径回到 /编码/")
+        void should_move_to_root() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long rootId = cascadeOrgManager.add(org(platformId, null, "一层"));
+            Long midId = cascadeOrgManager.add(org(platformId, rootId, "二层"));
+            Long leafId = cascadeOrgManager.add(org(platformId, midId, "三层"));
+            String midCode = cascadeOrgManager.getById(midId).getCascadeOrgId();
+            String leafCode = cascadeOrgManager.getById(leafId).getCascadeOrgId();
+
+            assertTrue(cascadeOrgManager.move(midId, null));
+
+            CascadeOrgDTO mid = cascadeOrgManager.getById(midId);
+            assertNull(mid.getParentOrgId());
+            assertEquals("/" + midCode + "/", mid.getOrgPath());
+            assertEquals(mid.getOrgPath() + leafCode + "/", cascadeOrgManager.getById(leafId).getOrgPath());
+            assertEquals(2, cascadeOrgManager.listSubtreeCodes(platformId, midCode, true).size());
+            assertEquals(1, cascadeOrgManager.listSubtreeCodes(platformId,
+                cascadeOrgManager.getById(rootId).getCascadeOrgId(), true).size(), "原父下只剩自己");
+        }
+
+        @Test
+        @DisplayName("不能移到自身或自己的子孙下，失败不留脏数据")
+        void should_reject_cycle() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long rootId = cascadeOrgManager.add(org(platformId, null, "一层"));
+            Long midId = cascadeOrgManager.add(org(platformId, rootId, "二层"));
+            Long leafId = cascadeOrgManager.add(org(platformId, midId, "三层"));
+            String rootPath = cascadeOrgManager.getById(rootId).getOrgPath();
+
+            assertThrows(IllegalArgumentException.class, () -> cascadeOrgManager.move(rootId, rootId));
+            assertThrows(IllegalArgumentException.class, () -> cascadeOrgManager.move(rootId, leafId));
+
+            assertEquals(rootPath, cascadeOrgManager.getById(rootId).getOrgPath(), "校验失败不能改路径");
+            assertEquals(rootId, cascadeOrgManager.getById(midId).getParentOrgId());
+        }
+
+        @Test
+        @DisplayName("目标父与当前父相同、或属于另一个上级平台时拒绝")
+        void should_reject_invalid_target() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long rootId = cascadeOrgManager.add(org(platformId, null, "一层"));
+            Long midId = cascadeOrgManager.add(org(platformId, rootId, "二层"));
+            Long anotherPlatformRoot = cascadeOrgManager.add(org(UniqueKeyFactory.deviceId(), null, "别的平台"));
+
+            assertThrows(IllegalArgumentException.class, () -> cascadeOrgManager.move(midId, rootId));
+            assertThrows(IllegalArgumentException.class, () -> cascadeOrgManager.move(midId, anotherPlatformRoot));
+            assertEquals(rootId, cascadeOrgManager.getById(midId).getParentOrgId());
+        }
+
+        @Test
+        @DisplayName("通道只跟组织编码绑定，移动后无需重新绑定")
+        void should_keep_channel_under_moved_org() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long rootId = cascadeOrgManager.add(org(platformId, null, "一层"));
+            Long midId = cascadeOrgManager.add(org(platformId, rootId, "二层"));
+            Long targetId = cascadeOrgManager.add(org(platformId, null, "另一棵树的根"));
+
+            CascadeChannelDTO ch = new CascadeChannelDTO();
+            ch.setPlatformId(platformId);
+            ch.setLocalDeviceId(UniqueKeyFactory.deviceId());
+            ch.setLocalChannelId(UniqueKeyFactory.channelId());
+            ch.setCascadeOrgId(cascadeOrgManager.getById(midId).getCascadeOrgId());
+            cascadeChannelManager.add(ch);
+
+            assertTrue(cascadeOrgManager.move(midId, targetId));
+
+            CascadeOrgDTO target = cascadeOrgManager.tree(platformId).stream()
+                .filter(node -> targetId.equals(node.getId()))
+                .findFirst()
+                .orElseThrow();
+            assertEquals(1, target.getChildren().size());
+            assertEquals(1, target.getChildren().get(0).getChannelCount(), "通道随组织走，不用重新绑定");
+        }
+
+        @Test
+        @DisplayName("编辑接口拒绝改父节点，不再静默忽略")
+        void update_should_reject_parent_change() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long rootId = cascadeOrgManager.add(org(platformId, null, "一层"));
+            Long midId = cascadeOrgManager.add(org(platformId, rootId, "二层"));
+
+            CascadeOrgDTO patch = new CascadeOrgDTO();
+            patch.setId(midId);
+            patch.setParentOrgId(rootId);
+
+            assertThrows(IllegalArgumentException.class, () -> cascadeOrgManager.update(patch));
+            assertEquals(rootId, cascadeOrgManager.getById(midId).getParentOrgId());
         }
     }
 

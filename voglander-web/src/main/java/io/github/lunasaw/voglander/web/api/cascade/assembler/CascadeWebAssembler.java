@@ -187,7 +187,7 @@ public class CascadeWebAssembler {
     }
 
     /**
-     * 组织更新请求 → DTO（父节点与编码不可改，因此不透传）。
+     * 组织更新请求 → DTO（组织编码不在入参里；父节点透了但只用于让 Manager 拒掉非法调用）。
      */
     public CascadeOrgDTO toDTO(CascadeOrgUpdateReq req) {
         if (req == null) {
@@ -195,6 +195,7 @@ public class CascadeWebAssembler {
         }
         CascadeOrgDTO dto = new CascadeOrgDTO();
         dto.setId(req.getId());
+        dto.setParentOrgId(req.getParentOrgId());
         dto.setOrgName(req.getOrgName());
         dto.setSortOrder(req.getSortOrder());
         dto.setEnabled(req.getEnabled());

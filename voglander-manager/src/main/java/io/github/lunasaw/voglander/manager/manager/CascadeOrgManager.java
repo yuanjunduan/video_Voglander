@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -16,9 +17,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.Assert;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 
 import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.RevokePolicy;
 import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
@@ -56,6 +61,8 @@ public class CascadeOrgManager {
     private static final String NET_ID         = "0";
     /** 物化路径分隔符：org_path 形如 {@code /A/B/}，前后都带分隔符，前缀匹配才能恰好覆盖整层 */
     private static final String PATH_SEPARATOR = "/";
+    /** {@code org_path} 列宽上限（VARCHAR(512)，约 24 层国标编码），移动后不得越界 */
+    private static final int    ORG_PATH_MAX_LENGTH = 512;
 
     @Autowired
     private CascadeOrgService     cascadeOrgService;
@@ -120,6 +127,8 @@ public class CascadeOrgManager {
         Assert.notNull(dto.getId(), "id 不能为空");
         CascadeOrgDTO existed = getById(dto.getId());
         Assert.notNull(existed, "组织不存在: id=" + dto.getId());
+        /* 父节点变更走 move()：静默忽略会让调用方以为改成功了 */
+        Assert.isTrue(dto.getParentOrgId() == null, "编辑接口不支持修改父组织，请使用移动接口");
 
         CascadeOrgDO update = new CascadeOrgDO();
         update.setId(dto.getId());
@@ -145,6 +154,104 @@ public class CascadeOrgManager {
             }
         }
         return ok;
+    }
+
+    /**
+     * 移动组织：把整棵子树改挂到另一个父节点下（{@code targetParentId} 为空表示回到平台根节点）。
+     *
+     * <p><b>为什么要单独一个方法</b>：上级目录没有“移动节点”语义，快照对已存在的节点只做 upsert、
+     * 不迁移父组织（海康实测），因此在上级侧只能「先按旧父删干净、再按新父重建」。
+     * 这条链路的时序必须由一处控制：删除清单用<b>移动前</b>的旧父编码，重命名/排序类更新绝不能走这里。
+     *
+     * <p><b>编码不变</b>：{@code cascadeOrgId} 保持不变，通道映射与上级对通道的引用都不受影响；
+     * 变的只有 {@code parent_org_id} 与整棵子树的 {@code org_path}（物化路径）。
+     *
+     * <p><b>通道不随删</b>：通道的所属组织编码没变，重推快照后会自动回到原组织下；
+     * 若上级在删组织时连带删了监控点，随后的快照也会把它补回来。
+     *
+     * @param id             被移动的组织主键
+     * @param targetParentId 目标父组织主键；{@code null} 表示移到平台根节点
+     * @return 是否成功
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean move(Long id, Long targetParentId) {
+        CascadeOrgDTO org = getById(id);
+        Assert.notNull(org, "组织不存在: id=" + id);
+        Assert.isTrue(!Objects.equals(org.getParentOrgId(), targetParentId),
+            "目标父组织与当前父组织相同，无需移动");
+
+        String platformId = org.getPlatformId();
+        String selfCode   = org.getCascadeOrgId();
+        String oldPath    = ensureOrgPath(org);
+        Assert.hasText(oldPath, "组织物化路径缺失，无法安全移动: id=" + id);
+
+        String newBasePath = PATH_SEPARATOR;
+        if (targetParentId != null) {
+            CascadeOrgDTO target = getById(targetParentId);
+            Assert.notNull(target, "目标父组织不存在: id=" + targetParentId);
+            Assert.isTrue(Objects.equals(target.getPlatformId(), platformId), "目标父组织不属于该上级平台");
+            String targetPath = ensureOrgPath(target);
+            Assert.hasText(targetPath, "目标父组织物化路径缺失: id=" + targetParentId);
+            /* 挂到自己或自己的子孙下会让整棵子树从树上脱落：子孙路径必然是自身路径的前缀延伸 */
+            Assert.isTrue(!targetPath.startsWith(oldPath), "不能把组织移到它自己或它的子组织下");
+            newBasePath = targetPath;
+        }
+
+        /* 子树与「旧父」节点清单必须在写库前算好：写完之后 parentCode 已经是新父，DEL 会删错树 */
+        List<CascadeOrgDTO> subtree = postOrderSubtree(org);
+        Map<Long, CascadeOrgDTO> oldIndex = indexById(listByPlatformId(platformId));
+        Map<Long, String> newPathById = buildNewPaths(org, subtree, newBasePath);
+
+        LambdaUpdateWrapper<CascadeOrgDO> uw = new LambdaUpdateWrapper<>();
+        uw.eq(CascadeOrgDO::getId, id)
+            .set(CascadeOrgDO::getParentOrgId, targetParentId)
+            .set(CascadeOrgDO::getOrgPath, newPathById.get(id));
+        Assert.isTrue(cascadeOrgService.update(uw), "移动组织失败: id=" + id);
+        for (CascadeOrgDTO node : subtree) {
+            if (Objects.equals(node.getId(), id)) {
+                continue;
+            }
+            CascadeOrgDO patch = new CascadeOrgDO();
+            patch.setId(node.getId());
+            patch.setOrgPath(newPathById.get(node.getId()));
+            cascadeOrgService.updateById(patch);
+        }
+        log.info("移动级联组织: id={}, cascadeOrgId={}, 旧父={}, 新父={}, 子树节点数={}",
+            id, selfCode, org.getParentOrgId(), targetParentId, subtree.size());
+
+        List<LocalCascadeCatalogChangeEvent.Node> oldNodes = subtree.stream()
+            .map(node -> orgNode(node, oldIndex))
+            .collect(Collectors.toList());
+        publishStructureRepush(platformId, selfCode, oldNodes);
+        return true;
+    }
+
+    /**
+     * 子树每个节点的新物化路径：{@code 目标父路径 + 自身在树中的相对链}。
+     *
+     * <p>不走「旧路径前缀替换」而按邻接表重算，是因为历史库可能还存在 {@code org_path} 未回填的行，
+     * 前缀替换会把它们的路径算成空串，整棵子树当场丢失。
+     */
+    private Map<Long, String> buildNewPaths(CascadeOrgDTO root, List<CascadeOrgDTO> subtree, String newBasePath) {
+        Map<Long, List<CascadeOrgDTO>> childrenByParent = subtree.stream()
+            .filter(o -> o.getParentOrgId() != null)
+            .collect(Collectors.groupingBy(CascadeOrgDTO::getParentOrgId));
+        Map<Long, String> paths = new LinkedHashMap<>();
+        appendNewPath(root, newBasePath + root.getCascadeOrgId() + PATH_SEPARATOR, childrenByParent, paths);
+        return paths;
+    }
+
+    private void appendNewPath(CascadeOrgDTO node, String path, Map<Long, List<CascadeOrgDTO>> childrenByParent,
+        Map<Long, String> paths) {
+        if (node == null || node.getId() == null || paths.containsKey(node.getId())) {
+            return;
+        }
+        Assert.isTrue(path.length() <= ORG_PATH_MAX_LENGTH,
+            "移动后层级过深，物化路径超出上限 " + ORG_PATH_MAX_LENGTH + ": " + path);
+        paths.put(node.getId(), path);
+        for (CascadeOrgDTO child : childrenByParent.getOrDefault(node.getId(), List.of())) {
+            appendNewPath(child, path + child.getCascadeOrgId() + PATH_SEPARATOR, childrenByParent, paths);
+        }
     }
 
     /**
@@ -473,10 +580,14 @@ public class CascadeOrgManager {
             .filter(o -> o.getId() != null)
             .collect(Collectors.toMap(CascadeOrgDTO::getId, o -> o, (a, b) -> a));
 
-        List<CascadeOrgDTO> roots = new ArrayList<>();
+        /* 先把所有节点的 children 初始化好再挂父子：列表按 sortOrder/id 排序，子组织完全可能
+           排在父组织之前（排序值更小、或移动后 id 比新父更早），边遍历边挂会拿到还没初始化的 null */
         for (CascadeOrgDTO org : all) {
             org.setChildren(new ArrayList<>());
             org.setChannelCount(countByOrg.getOrDefault(org.getCascadeOrgId(), 0L).intValue());
+        }
+        List<CascadeOrgDTO> roots = new ArrayList<>();
+        for (CascadeOrgDTO org : all) {
             /* 父节点不在本次集合里（子树根，或父节点已停用/删除）时，它就是这一层的根 */
             CascadeOrgDTO parent = org.getParentOrgId() == null ? null : byId.get(org.getParentOrgId());
             if (parent == null || parent == org) {
@@ -678,6 +789,31 @@ public class CascadeOrgManager {
         }
         eventPublisher.publishEvent(
             new LocalCascadeCatalogChangeEvent(platformId, "ORG", cascadeOrgId, event));
+    }
+
+    /**
+     * 发布「先删旧树、再重推快照」事件（组织移动专用）。
+     *
+     * <p>只在事务提交后发：{@code CascadeEventBridge} 是异步监听者，提交前发出去会读到移动前的旧数据，
+     * 删完又把旧树推回上级，等于白做。
+     */
+    private void publishStructureRepush(String platformId, String cascadeOrgId,
+        List<LocalCascadeCatalogChangeEvent.Node> oldNodes) {
+        if (eventPublisher == null || StringUtils.isBlank(platformId)) {
+            return;
+        }
+        Runnable publish = () -> eventPublisher.publishEvent(
+            new LocalCascadeCatalogChangeEvent(platformId, "ORG", cascadeOrgId, "DEL", oldNodes));
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    publish.run();
+                }
+            });
+            return;
+        }
+        publish.run();
     }
 
     private void assertParentExists(String platformId, Long parentOrgId) {

@@ -21,6 +21,7 @@ import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeRevokePrevi
 import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
 import io.github.lunasaw.voglander.web.api.cascade.assembler.CascadeWebAssembler;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeOrgCreateReq;
+import io.github.lunasaw.voglander.web.api.cascade.req.CascadeOrgMoveReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeOrgUpdateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeRevokeBatchReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeRevokeReq;
@@ -72,6 +73,21 @@ public class CascadeOrgController {
         dto.setId(id);
         boolean ok = cascadeOrgManager.update(dto);
         return AjaxResult.success(ok);
+    }
+
+    /**
+     * 移动组织：把整棵子树改挂到另一个父组织下。
+     *
+     * <p>之所以单独一个接口而不是复用 {@code PUT}：上级目录没有“移动节点”语义，快照对已存在的节点
+     * 只做 upsert、不迁移父组织，所以这里必须走「按旧父删干净 → 按新父重推」这条链路。
+     * 它与改名的代价完全不同（上级会重建整棵子树），混在一个接口里用户很难预期后果。
+     */
+    @PostMapping("/{id}/move")
+    @Operation(summary = "移动级联组织（含整棵子树）",
+        description = "targetParentId 为空表示移到平台根节点；上级侧会先按旧父删除再按新父重推，编码不变")
+    public AjaxResult<Boolean> move(@PathVariable Long id, @RequestBody(required = false) CascadeOrgMoveReq req) {
+        Long targetParentId = req == null ? null : req.getTargetParentId();
+        return AjaxResult.success(cascadeOrgManager.move(id, targetParentId));
     }
 
     @DeleteMapping("/{id}")
