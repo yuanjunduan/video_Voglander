@@ -40,6 +40,14 @@ public class CascadeOrgDTO {
     private Integer           sortOrder;
     /** 1-上报 0-不上报（整棵子树剪掉） */
     private Integer           enabled;
+    /**
+     * 取消同步时其下通道的处置策略（{@code CascadeConstant.RevokePolicy}）。
+     *
+     * <p>{@code CASCADE}：通道跟随组织一起从上级目录移除，恢复时一起回来；
+     * {@code REROUTE}：只移除组织，其下通道改挂域节点继续上报。
+     * 空值按 {@code CASCADE} 处理。
+     */
+    private String            revokePolicy;
 
     /** 子组织，仅树形出参使用 */
     private List<CascadeOrgDTO> children;

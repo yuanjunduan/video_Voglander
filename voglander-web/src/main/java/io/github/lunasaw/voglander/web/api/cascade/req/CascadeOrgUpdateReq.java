@@ -37,4 +37,11 @@ public class CascadeOrgUpdateReq implements Serializable {
      * 是否上报 1上报 / 0不上报
      */
     private Integer enabled;
+
+    /**
+     * 取消同步时其下通道的处置策略：CASCADE-通道一并取消（默认）/ REROUTE-通道上浮挂域节点。
+     *
+     * <p>只在“取消同步”动作上有意义；传空表示不改。
+     */
+    private String  revokePolicy;
 }

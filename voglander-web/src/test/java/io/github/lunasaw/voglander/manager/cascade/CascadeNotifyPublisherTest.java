@@ -1,6 +1,7 @@
 package io.github.lunasaw.voglander.manager.cascade;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -29,6 +30,7 @@ import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import io.github.lunasaw.gb28181.common.entity.notify.DeviceAlarmNotify;
 import io.github.lunasaw.gb28181.common.entity.notify.DeviceOtherUpdateNotify;
@@ -39,6 +41,7 @@ import io.github.lunasaw.sip.common.transmit.SipSender;
 import io.github.lunasaw.sip.common.transmit.request.SipRequestBuilderFactory;
 import io.github.lunasaw.sip.common.utils.SipRequestUtils;
 import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.SubType;
+import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeCatalogAssembler;
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeChannelMetaResolver;
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeDeviceSupplier;
@@ -381,6 +384,100 @@ class CascadeNotifyPublisherTest {
         try (MockedStatic<SipRequestBuilderFactory> factoryMock = mockStatic(SipRequestBuilderFactory.class)) {
             publisher.pushCatalogDelete("PF9", "  ");
             factoryMock.verifyNoInteractions();
+        }
+    }
+
+    /* ---- pushCatalogDeleteBatch（整棵子树 / 后序清单） ---- */
+
+    @Test
+    @DisplayName("批量删除：每个节点单独一包，带各自的 Name/ParentID")
+    void catalog_delete_batch_pushes_one_packet_per_node() {
+        String pf = "PF10";
+        stubEndpoint(pf);
+
+        try (MockedStatic<SipRequestBuilderFactory> factoryMock = mockStatic(SipRequestBuilderFactory.class);
+             MockedStatic<SipSender> sipMock = mockStatic(SipSender.class);
+             MockedStatic<SipRequestUtils> utilsMock = mockStatic(SipRequestUtils.class)) {
+            List<String> messages = startSipCapture(factoryMock, utilsMock);
+
+            int sent = publisher.pushCatalogDeleteBatch(pf, List.of(
+                new LocalCascadeCatalogChangeEvent.Node("CH-1", "前门", "ORG-2"),
+                new LocalCascadeCatalogChangeEvent.Node("ORG-2", "二层", "ORG-1"),
+                new LocalCascadeCatalogChangeEvent.Node("ORG-1", "一层", null)));
+
+            assertEquals(3, sent, "逐条发，不攒成一个多 Item 的包");
+            assertEquals(3, messages.size());
+            sipMock.verify(() -> SipSender.transmitRequest(any(), any()), times(3));
+            for (String xml : messages) {
+                assertTrue(xml.contains("<Event>DEL</Event>"), xml);
+                assertTrue(xml.contains("<SumNum>1</SumNum>"), xml);
+            }
+            assertTrue(messages.get(0).contains("<ParentID>ORG-2</ParentID>"), messages.get(0));
+            /* 根组织没有父组织，必须回落域编码，否则上级收到空 ParentID 会丢包 */
+            assertTrue(messages.get(2).contains("<ParentID>" + DOMAIN_ID + "</ParentID>"), messages.get(2));
+        }
+    }
+
+    @Test
+    @DisplayName("批量删除：空清单 / 空编码不发包")
+    void catalog_delete_batch_blank_should_skip() {
+        try (MockedStatic<SipRequestBuilderFactory> factoryMock = mockStatic(SipRequestBuilderFactory.class)) {
+            assertEquals(0, publisher.pushCatalogDeleteBatch("PF10", List.of()));
+            assertEquals(0, publisher.pushCatalogDeleteBatch("PF10", null));
+            assertEquals(0, publisher.pushCatalogDeleteBatch("PF10",
+                List.of(new LocalCascadeCatalogChangeEvent.Node(" ", "无名", null))));
+            factoryMock.verifyNoInteractions();
+        }
+    }
+
+    /* ---- pushCatalogReparent（REROUTE：通道改挂域节点） ---- */
+
+    @Test
+    @DisplayName("通道改挂：默认 UPDATE 模式发一条 Event=UPDATE，父节点改为域编码")
+    void catalog_reparent_update_mode() {
+        String pf = "PF11";
+        stubEndpoint(pf);
+
+        try (MockedStatic<SipRequestBuilderFactory> factoryMock = mockStatic(SipRequestBuilderFactory.class);
+             MockedStatic<SipSender> sipMock = mockStatic(SipSender.class);
+             MockedStatic<SipRequestUtils> utilsMock = mockStatic(SipRequestUtils.class)) {
+            List<String> messages = startSipCapture(factoryMock, utilsMock);
+
+            int sent = publisher.pushCatalogReparent(pf,
+                List.of(new LocalCascadeCatalogChangeEvent.Node("CH-1", "前门", "ORG-1")));
+
+            assertEquals(1, sent);
+            String xml = messages.get(0);
+            assertTrue(xml.contains("<Event>UPDATE</Event>"), xml);
+            assertTrue(xml.contains("<DeviceID>CH-1</DeviceID>"), xml);
+            /* 改挂后退的父节点必须是域编码，不是原组织 */
+            assertTrue(xml.contains("<ParentID>" + DOMAIN_ID + "</ParentID>"), xml);
+            assertFalse(xml.contains("<ParentID>ORG-1</ParentID>"), xml);
+        }
+    }
+
+    @Test
+    @DisplayName("通道改挂：DEL_ADD 模式先删旧父再以域节点为父新增")
+    void catalog_reparent_del_add_mode() {
+        String pf = "PF12";
+        stubEndpoint(pf);
+        ReflectionTestUtils.setField(publisher, "reparentMode", "DEL_ADD");
+
+        try (MockedStatic<SipRequestBuilderFactory> factoryMock = mockStatic(SipRequestBuilderFactory.class);
+             MockedStatic<SipSender> sipMock = mockStatic(SipSender.class);
+             MockedStatic<SipRequestUtils> utilsMock = mockStatic(SipRequestUtils.class)) {
+            List<String> messages = startSipCapture(factoryMock, utilsMock);
+
+            int sent = publisher.pushCatalogReparent(pf,
+                List.of(new LocalCascadeCatalogChangeEvent.Node("CH-1", "前门", "ORG-1")));
+
+            assertEquals(2, sent, "DEL + ADD 两条");
+            String del = messages.get(0);
+            String add = messages.get(1);
+            assertTrue(del.contains("<Event>DEL</Event>"), del);
+            assertTrue(del.contains("<ParentID>ORG-1</ParentID>"), "先按旧父定位到该节点: " + del);
+            assertTrue(add.contains("<Event>ADD</Event>"), add);
+            assertTrue(add.contains("<ParentID>" + DOMAIN_ID + "</ParentID>"), add);
         }
     }
 }

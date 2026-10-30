@@ -6,6 +6,7 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.DisplayName;
@@ -89,6 +90,36 @@ class CascadeEventBridgeTest {
             new LocalCascadeCatalogChangeEvent("PLAT", "ORG", "34020000002150000002", "ADD"));
 
         verify(notifyPublisher, never()).pushCatalogDelete(any(), any());
+        verify(notifyPublisher).pushCatalogSnapshot("PLAT", null);
+    }
+
+    @Test
+    @DisplayName("批量取消同步：清单非空时逐条批量 DEL，不走单条分支")
+    void catalog_delete_with_nodes_should_use_batch() {
+        List<LocalCascadeCatalogChangeEvent.Node> nodes = List.of(
+            new LocalCascadeCatalogChangeEvent.Node("CH-1", "前门", "ORG-1"),
+            new LocalCascadeCatalogChangeEvent.Node("ORG-1", "一层", null));
+
+        bridge.onCatalogStructureChange(
+            new LocalCascadeCatalogChangeEvent("PLAT", "ORG", "ORG-1", "DEL", nodes));
+
+        verify(notifyPublisher).pushCatalogDeleteBatch("PLAT", nodes);
+        /* 单条分支会把 cascadeId 当成唯一节点，对整棵子树只能删掉根，不能用它 */
+        verify(notifyPublisher, never()).pushCatalogDelete(any(), any());
+        verify(notifyPublisher).pushCatalogSnapshot("PLAT", null);
+    }
+
+    @Test
+    @DisplayName("通道改挂：REPARENT 走改父推送，不发 DEL")
+    void catalog_reparent_should_call_reparent() {
+        List<LocalCascadeCatalogChangeEvent.Node> nodes = List.of(
+            new LocalCascadeCatalogChangeEvent.Node("CH-1", "前门", "ORG-1"));
+
+        bridge.onCatalogStructureChange(
+            new LocalCascadeCatalogChangeEvent("PLAT", "CHANNEL", "ORG-1", "REPARENT", nodes));
+
+        verify(notifyPublisher).pushCatalogReparent("PLAT", nodes);
+        verify(notifyPublisher, never()).pushCatalogDeleteBatch(any(), any());
         verify(notifyPublisher).pushCatalogSnapshot("PLAT", null);
     }
 }

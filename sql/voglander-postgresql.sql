@@ -715,6 +715,7 @@ CREATE TABLE tb_cascade_org
     org_name       VARCHAR(255) NOT NULL,
     sort_order     INT          NOT NULL DEFAULT 0,
     enabled        SMALLINT     NOT NULL DEFAULT 1,
+    revoke_policy  VARCHAR(16)  NOT NULL DEFAULT 'CASCADE',
     PRIMARY KEY (id),
     UNIQUE (platform_id, cascade_org_id)
 );

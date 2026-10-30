@@ -1,5 +1,7 @@
 package io.github.lunasaw.voglander.common.event;
 
+import java.util.List;
+
 /**
  * 级联目录<b>结构</b>变更事件（组织增删改、通道换组织）。
  *
@@ -24,12 +26,35 @@ public class LocalCascadeCatalogChangeEvent {
     private final String cascadeId;
     /** 变更类型：ADD / UPDATE / DEL */
     private final String event;
+    /**
+     * 批量节点清单（已按「叶子 → 根」后序排好），仅 DEL 场景使用。
+     *
+     * <p>组织「取消同步」会一次性把整棵子树从上级目录移除，节点数不定；
+     * 元素为空时调用方按单个 {@link #cascadeId} 处理。
+     */
+    private final List<Node> nodes;
 
     public LocalCascadeCatalogChangeEvent(String platformId, String scope, String cascadeId, String event) {
+        this(platformId, scope, cascadeId, event, null);
+    }
+
+    public LocalCascadeCatalogChangeEvent(String platformId, String scope, String cascadeId, String event,
+        List<Node> nodes) {
         this.platformId = platformId;
         this.scope = scope;
         this.cascadeId = cascadeId;
         this.event = event;
+        this.nodes = nodes;
+    }
+
+    /**
+     * 需要通知上级的单个目录节点。
+     *
+     * @param cascadeId  上级眼里的节点编码（组织编码 / 级联通道编码）
+     * @param name       节点名称，可空
+     * @param parentCode 父节点编码，可空；带上上级才能确定删哪棵树
+     */
+    public record Node(String cascadeId, String name, String parentCode) {
     }
 
     public String getPlatformId() {
@@ -46,5 +71,9 @@ public class LocalCascadeCatalogChangeEvent {
 
     public String getEvent() {
         return event;
+    }
+
+    public List<Node> getNodes() {
+        return nodes;
     }
 }

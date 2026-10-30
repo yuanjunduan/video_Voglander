@@ -74,6 +74,20 @@ public final class CascadeManscdpXml {
      * @param event    {@code DEL} / {@code ADD} / {@code UPDATE}
      */
     public static String catalogEventNotify(String domainId, String sn, String deviceId, String event) {
+        return catalogEventNotify(domainId, sn, new CatalogEventItem(deviceId, null, null, event));
+    }
+
+    /**
+     * 目录变更通知（带完整目录项）：{@code DEL} 时额外带 {@code Name}/{@code ParentID}。
+     *
+     * <p><b>为什么删除要带 ParentID</b>：上级按 {@code ParentID} 定位节点所在的那棵树。
+     * 只给 {@code DeviceID + Event} 时，部分上级需要先反查节点归属才能删；参考实现
+     * （CSS {@code sendOrgDeltaData}）删除组织时同样带 {@code Name} 与 {@code ParentID}。
+     * 两个字段都是可选的，通道级删除仍可只发 {@code DeviceID}。
+     *
+     * @param item 被变更节点；{@code name}/{@code parentId} 为空时自动省略
+     */
+    public static String catalogEventNotify(String domainId, String sn, CatalogEventItem item) {
         StringBuilder xml = start("Notify");
         append(xml, "CmdType", "Catalog");
         append(xml, "SN", sn);
@@ -81,11 +95,24 @@ public final class CascadeManscdpXml {
         append(xml, "SumNum", 1);
         xml.append(INDENT).append("<DeviceList Num=\"1\">").append(LF);
         xml.append(INDENT).append("<Item>").append(LF);
-        append(xml, "DeviceID", deviceId);
-        append(xml, "Event", event);
+        append(xml, "DeviceID", item.deviceId());
+        append(xml, "Name", item.name());
+        append(xml, "ParentID", item.parentId());
+        append(xml, "Event", item.event());
         xml.append(INDENT).append("</Item>").append(LF);
         xml.append(INDENT).append("</DeviceList>").append(LF);
         return end(xml, "Notify");
+    }
+
+    /**
+     * 目录变更通知里的单个节点。
+     *
+     * @param deviceId 上级眼里的节点编码（组织编码 / 级联通道编码）
+     * @param name     节点名称，可空（删除通道时可省）
+     * @param parentId 父节点编码，可空；带上级才能确定删哪棵树
+     * @param event    {@code ADD} / {@code UPDATE} / {@code DEL}
+     */
+    public record CatalogEventItem(String deviceId, String name, String parentId, String event) {
     }
 
     /** 设备信息应答（A.2.6 f) / §9.5.3.2）。 */

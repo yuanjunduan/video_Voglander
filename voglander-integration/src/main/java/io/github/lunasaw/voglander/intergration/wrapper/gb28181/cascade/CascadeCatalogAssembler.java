@@ -12,6 +12,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Component;
 
 import io.github.lunasaw.gb28181.common.entity.response.DeviceItem;
+import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.RevokePolicy;
 import io.github.lunasaw.voglander.common.constant.device.DeviceConstant;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
@@ -83,7 +84,7 @@ public class CascadeCatalogAssembler {
                 CascadeCatalogNode.Kind.ORG));
         }
 
-        List<CascadeChannelDTO> channels = loadChannels(platformId);
+        List<CascadeChannelDTO> channels = loadChannels(platformId, orgCodes);
         Map<String, Integer> statusMap = loadChannelStatus(channels);
         /* 通道项的厂商/型号/地址/IP/PTZ 类型：覆盖值优先，其余按设备通道实时数据派生 */
         Map<String, CascadeChannelMeta> metaMap = channelMetaResolver.resolve(channels);
@@ -266,18 +267,59 @@ public class CascadeCatalogAssembler {
         return domainId;
     }
 
-    private List<CascadeChannelDTO> loadChannels(String platformId) {
+    /**
+     * 取应该上报给上级的通道。
+     *
+     * <p>两道过滤：通道自身{@code enabled=1}；且没被所属组织的「取消同步」剪掉。
+     *
+     * <p><b>为何第二道过滤不能省</b>：组织取消同步会推 {@code Event=DEL} 把整棵子树从上级目录删掉，
+     * 但快照组装只看通道自身开关——不按组织剔一遍，下一次推快照（心跳、下级查询、重订阅）
+     * 又会把通道以「挂域节点」的形态加回来，取消同步等于白做。
+     */
+    private List<CascadeChannelDTO> loadChannels(String platformId, Set<String> effectiveOrgCodes) {
         List<CascadeChannelDTO> channels = cascadeChannelManager.listByPlatformId(platformId);
         if (channels == null || channels.isEmpty()) {
             return new ArrayList<>();
         }
+        Map<String, CascadeOrgDTO> orgByCode = cascadeOrgManager.listByPlatformId(platformId).stream()
+            .filter(o -> StringUtils.isNotBlank(o.getCascadeOrgId()))
+            .collect(Collectors.toMap(CascadeOrgDTO::getCascadeOrgId, o -> o, (a, b) -> a));
         return channels.stream()
             .filter(c -> c.getEnabled() != null && c.getEnabled() == 1)
+            .filter(c -> isChannelVisible(c, orgByCode, effectiveOrgCodes))
             /* 同组织内按名称排序，避免每次下发顺序抖动让上级反复重建节点 */
             .sorted((a, b) -> StringUtils.compare(
                 StringUtils.defaultIfBlank(a.getCascadeOrgId(), ""),
                 StringUtils.defaultIfBlank(b.getCascadeOrgId(), "")))
             .collect(Collectors.toList());
+    }
+
+    /**
+     * 通道是否还应出现在上级目录里。
+     *
+     * <p>所属组织生效 → 可见；组织停报时按该组织的 {@code revokePolicy} 决定：
+     * {@code CASCADE} 通道一起消失，{@code REROUTE} 上浮挂域节点继续上报。
+     * 组织被物理删除的残留数据仍按可见处理（兜底挂域节点），不默默吞掉通道。
+     */
+    private boolean isChannelVisible(CascadeChannelDTO channel, Map<String, CascadeOrgDTO> orgByCode,
+        Set<String> effectiveOrgCodes) {
+        String orgId = channel.getCascadeOrgId();
+        if (StringUtils.isBlank(orgId)) {
+            return true;
+        }
+        if (effectiveOrgCodes.contains(orgId)) {
+            return true;
+        }
+        CascadeOrgDTO org = orgByCode.get(orgId);
+        if (org == null) {
+            return true;
+        }
+        boolean reroute = RevokePolicy.REROUTE.equals(RevokePolicy.normalize(org.getRevokePolicy()));
+        if (!reroute) {
+            log.debug("组织已取消同步且策略为 CASCADE，通道不再上报: cascadeChannelId={}, cascadeOrgId={}",
+                channel.getCascadeChannelId(), orgId);
+        }
+        return reroute;
     }
 
     /** 一次查出本次涉及设备下所有通道的状态，避免逐通道回表。 */

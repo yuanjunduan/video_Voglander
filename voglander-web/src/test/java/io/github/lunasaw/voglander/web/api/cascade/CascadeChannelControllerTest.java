@@ -127,6 +127,28 @@ class CascadeChannelControllerTest {
     }
 
     @Test
+    @DisplayName("取消同步：委托 manager.revoke（推 DEL 并保留记录）")
+    void revoke_ok() throws Exception {
+        when(cascadeChannelManager.revoke(7L)).thenReturn(true);
+        mvc.perform(post("/api/v1/cascade/channel/7/revoke"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data").value(true));
+        verify(cascadeChannelManager).revoke(7L);
+        /* 取消同步不能走删除：删了就再也恢复不了 */
+        verify(cascadeChannelManager, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("恢复同步：委托 manager.publish（推 ADD）")
+    void publish_ok() throws Exception {
+        when(cascadeChannelManager.publish(7L)).thenReturn(true);
+        mvc.perform(post("/api/v1/cascade/channel/7/publish"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data").value(true));
+        verify(cascadeChannelManager).publish(7L);
+    }
+
+    @Test
     @DisplayName("批量绑定：委托 manager.batchBind 并返回新增条数")
     void batchBind_ok() throws Exception {
         when(cascadeChannelManager.batchBind(anyList())).thenReturn(2);

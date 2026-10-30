@@ -68,6 +68,13 @@ public class CascadeOrgVO implements Serializable {
     private Integer           enabled;
 
     /**
+     * 取消同步时其下通道的处置策略：CASCADE / REROUTE。
+     *
+     * <p>取消同步弹窗需要回显上次的选择，避免用户每次都重选。
+     */
+    private String            revokePolicy;
+
+    /**
      * 直属通道数（仅树形出参填充）
      */
     private Integer           channelCount;

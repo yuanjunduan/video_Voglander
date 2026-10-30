@@ -123,35 +123,109 @@ public class CascadeChannelManager {
      * <p>{@code cascadeOrgId} 三态语义：{@code null} 不动组织归属；空串迁回平台根节点；
      * 非空迁到该组织。空串之所以要单独处理，是因为 {@code updateById} 会跳过 null 字段，
      * 直接把 null 交给它等于"不改"，迁回根节点永远不生效。
+     *
+     * <p><b>启停不只是改字段</b>：{@code 1 -> 0} 必须显式推 {@code Event=DEL}，否则上级目录里的
+     * 通道会永久留着（快照是增量 upsert 语义，不会因为节点「这次没出现」就删）；
+     * {@code 0 -> 1} 同理需要 {@code ADD}，否则要等到下一次整树重推才回来。
      */
     public boolean update(CascadeChannelDTO dto) {
         Assert.notNull(dto.getId(), "id 不能为空");
+        CascadeChannelDTO existed = getById(dto.getId());
+        Assert.notNull(existed, "级联通道不存在: id=" + dto.getId());
+        String  platformId   = existed.getPlatformId();
         boolean orgIdTouched = dto.getCascadeOrgId() != null;
-        String  orgId        = null;
         boolean orgChanged   = false;
-        String  platformId   = null;
         if (orgIdTouched) {
-            CascadeChannelDTO existed = getById(dto.getId());
-            Assert.notNull(existed, "级联通道不存在: id=" + dto.getId());
-            platformId = existed.getPlatformId();
-            orgId = normalizeOrgId(platformId, dto.getCascadeOrgId());
+            String orgId = normalizeOrgId(platformId, dto.getCascadeOrgId());
             dto.setCascadeOrgId(orgId);
             orgChanged = !StringUtils.equals(existed.getCascadeOrgId(), orgId);
         }
 
         boolean ok = cascadeChannelService.updateById(CascadeAssembler.toDO(dto));
-        if (orgIdTouched && orgId == null) {
+        if (orgIdTouched && dto.getCascadeOrgId() == null) {
             LambdaUpdateWrapper<CascadeChannelDO> uw = new LambdaUpdateWrapper<>();
             uw.eq(CascadeChannelDO::getId, dto.getId())
                 .set(CascadeChannelDO::getCascadeOrgId, null);
             cascadeChannelService.update(uw);
         }
-        if (ok && orgChanged) {
+        if (!ok) {
+            return false;
+        }
+
+        boolean wasEnabled = existed.getEnabled() == null || existed.getEnabled() == 1;
+        boolean nowEnabled = dto.getEnabled() == null ? wasEnabled : dto.getEnabled() == 1;
+        if (wasEnabled && !nowEnabled) {
+            /* 删的是上级眼里那个节点，编码变过也要用改之前的 */
+            publishEvent(platformId, existed.getCascadeChannelId(), "DEL");
+        } else if (!wasEnabled && nowEnabled) {
+            publishEvent(platformId,
+                StringUtils.defaultIfBlank(dto.getCascadeChannelId(), existed.getCascadeChannelId()), "ADD");
+        } else if (orgChanged) {
             /* 换组织改变的是父子关系，增量条目表达不了，由事件桥接重推整棵目录 */
-            eventPublisher.publishEvent(
-                new LocalCascadeCatalogChangeEvent(platformId, "CHANNEL", dto.getCascadeChannelId(), "UPDATE"));
+            publishEvent(platformId, existed.getCascadeChannelId(), "UPDATE");
+        }
+        return true;
+    }
+
+    /**
+     * 取消单条通道同步：不再上报，记录保留可恢复。
+     *
+     * @param id 通道映射主键
+     * @return 是否变更（已处于停报状态时幂等返回 true）
+     */
+    public boolean revoke(Long id) {
+        Assert.notNull(id, "id 不能为空");
+        CascadeChannelDTO existed = getById(id);
+        Assert.notNull(existed, "级联通道不存在: id=" + id);
+        if (existed.getEnabled() != null && existed.getEnabled() == 0) {
+            return true;
+        }
+        CascadeChannelDO patch = new CascadeChannelDO();
+        patch.setId(id);
+        patch.setEnabled(0);
+        boolean ok = cascadeChannelService.updateById(patch);
+        if (ok) {
+            log.info("取消级联通道同步: id={}, cascadeChannelId={}", id, existed.getCascadeChannelId());
+            publishEvent(existed.getPlatformId(), existed.getCascadeChannelId(), "DEL");
         }
         return ok;
+    }
+
+    /**
+     * 恢复单条通道同步。
+     *
+     * <p>所属组织处于停报状态时拒绝：通道的 {@code ParentID} 指向一个上级看不到的组织，
+     * 恢复后只会变成一个挂不上去的孤儿条目。
+     */
+    public boolean publish(Long id) {
+        Assert.notNull(id, "id 不能为空");
+        CascadeChannelDTO existed = getById(id);
+        Assert.notNull(existed, "级联通道不存在: id=" + id);
+        if (StringUtils.isNotBlank(existed.getCascadeOrgId())) {
+            Assert.isTrue(cascadeOrgManager.isEnabledOrg(existed.getPlatformId(), existed.getCascadeOrgId()),
+                "所属级联组织处于停报状态，请先恢复组织");
+        }
+        CascadeChannelDO patch = new CascadeChannelDO();
+        patch.setId(id);
+        patch.setEnabled(1);
+        boolean ok = cascadeChannelService.updateById(patch);
+        if (ok) {
+            log.info("恢复级联通道同步: id={}, cascadeChannelId={}", id, existed.getCascadeChannelId());
+            publishEvent(existed.getPlatformId(), existed.getCascadeChannelId(), "ADD");
+        }
+        return ok;
+    }
+
+    /** 发布目录变更事件，由 {@code CascadeEventBridge} 转成 MANSCDP 报文 */
+    private void publishEvent(String platformId, String cascadeChannelId, String event) {
+        if (eventPublisher == null || StringUtils.isBlank(platformId)
+            || StringUtils.isBlank(cascadeChannelId)) {
+            log.warn("级联通道变更未通知上级，缺少平台/通道编码: platformId={}, cascadeChannelId={}, event={}",
+                platformId, cascadeChannelId, event);
+            return;
+        }
+        eventPublisher.publishEvent(
+            new LocalCascadeCatalogChangeEvent(platformId, "CHANNEL", cascadeChannelId, event));
     }
 
     /**

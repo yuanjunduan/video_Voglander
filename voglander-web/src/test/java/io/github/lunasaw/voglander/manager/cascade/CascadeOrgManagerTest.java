@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import io.github.lunasaw.voglander.BaseTest;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeRevokePreviewDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadeChannelManager;
 import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
 import io.github.lunasaw.voglander.support.UniqueKeyFactory;
@@ -228,6 +229,114 @@ class CascadeOrgManagerTest extends BaseTest {
             List<CascadeOrgDTO> effective = cascadeOrgManager.listEffective(platformId);
             assertEquals(1, effective.size());
             assertEquals(rootId, effective.get(0).getId());
+        }
+    }
+
+    @Nested
+    @DisplayName("revoke / preview / publish - 取消同步")
+    class Revoke {
+
+        private CascadeChannelDTO channel(String platformId, String orgCode) {
+            CascadeChannelDTO ch = new CascadeChannelDTO();
+            ch.setPlatformId(platformId);
+            ch.setLocalDeviceId(UniqueKeyFactory.deviceId());
+            ch.setLocalChannelId(UniqueKeyFactory.channelId());
+            ch.setCascadeOrgId(orgCode);
+            ch.setEnabled(1);
+            return ch;
+        }
+
+        /** 造一棵 三层 树，叶子组织挂一条通道，返回 [rootId, midId, leafId] */
+        private Long[] buildTreeWithChannel(String platformId) {
+            Long rootId = cascadeOrgManager.add(org(platformId, null, "一层"));
+            Long midId = cascadeOrgManager.add(org(platformId, rootId, "二层"));
+            Long leafId = cascadeOrgManager.add(org(platformId, midId, "三层"));
+            cascadeChannelManager.add(channel(platformId, cascadeOrgManager.getById(leafId).getCascadeOrgId()));
+            return new Long[] {rootId, midId, leafId};
+        }
+
+        @Test
+        @DisplayName("预览按后序（叶子→根）给出组织清单，通道单列")
+        void preview_should_list_post_order() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long[] ids = buildTreeWithChannel(platformId);
+
+            CascadeRevokePreviewDTO preview = cascadeOrgManager.previewRevoke(ids[0], "CASCADE");
+
+            List<String> codes = preview.getOrgs().stream()
+                .map(io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent.Node::cascadeId)
+                .collect(java.util.stream.Collectors.toList());
+            assertEquals(List.of(
+                cascadeOrgManager.getById(ids[2]).getCascadeOrgId(),
+                cascadeOrgManager.getById(ids[1]).getCascadeOrgId(),
+                cascadeOrgManager.getById(ids[0]).getCascadeOrgId()), codes,
+                "先子后父：反过来会让上级先丢父节点，子节点变孤儿");
+            assertEquals(3, preview.orgCount());
+            assertEquals(1, preview.channelCount());
+            assertEquals(4, preview.deleteCount(), "通道 + 三个组织");
+            assertEquals("CASCADE", preview.getRevokePolicy());
+        }
+
+        @Test
+        @DisplayName("预览 REROUTE：通道仍列出（要改挂）但不算进删除报文数")
+        void preview_reroute_counts_only_orgs_as_deletions() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long[] ids = buildTreeWithChannel(platformId);
+
+            CascadeRevokePreviewDTO preview = cascadeOrgManager.previewRevoke(ids[0], "REROUTE");
+
+            assertEquals(3, preview.orgCount());
+            assertEquals(1, preview.channelCount(), "需要告知用户有 1 条通道会被改挂");
+            assertEquals(3, preview.deleteCount(), "REROUTE 不发通道 DEL，删除报文只算组织");
+        }
+
+        @Test
+        @DisplayName("取消同步只改 enabled/策略，组织与通道一条不删")
+        void revoke_should_keep_data() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long[] ids = buildTreeWithChannel(platformId);
+
+            assertTrue(cascadeOrgManager.revoke(ids[0], "REROUTE"));
+
+            CascadeOrgDTO root = cascadeOrgManager.getById(ids[0]);
+            assertEquals(0, root.getEnabled());
+            assertEquals("REROUTE", root.getRevokePolicy(), "策略必须落库，事后无法从 enabled 反推");
+            assertNotNull(cascadeOrgManager.getById(ids[1]), "子组织不动");
+            assertTrue(cascadeOrgManager.listEffective(platformId).isEmpty(), "整棵子树不再上报");
+        }
+
+        @Test
+        @DisplayName("取消同步幂等：重复调用不报错")
+        void revoke_should_be_idempotent() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long[] ids = buildTreeWithChannel(platformId);
+
+            assertTrue(cascadeOrgManager.revoke(ids[0], null));
+            assertTrue(cascadeOrgManager.revoke(ids[0], null));
+            assertEquals(0, cascadeOrgManager.getById(ids[0]).getEnabled());
+        }
+
+        @Test
+        @DisplayName("恢复同步：祖先仍停报时拒绝，避免产生挂不上去的子树")
+        void publish_should_reject_when_ancestor_revoked() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long[] ids = buildTreeWithChannel(platformId);
+            cascadeOrgManager.revoke(ids[0], null);
+
+            assertThrows(IllegalArgumentException.class, () -> cascadeOrgManager.publish(ids[1]));
+        }
+
+        @Test
+        @DisplayName("恢复同步后重新进入生效集合")
+        void publish_should_restore() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long[] ids = buildTreeWithChannel(platformId);
+            cascadeOrgManager.revoke(ids[0], null);
+
+            assertTrue(cascadeOrgManager.publish(ids[0]));
+
+            assertEquals(1, cascadeOrgManager.getById(ids[0]).getEnabled());
+            assertEquals(3, cascadeOrgManager.listEffective(platformId).size(), "整棵子树一起回来");
         }
     }
 

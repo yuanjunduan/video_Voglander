@@ -41,13 +41,14 @@ import lombok.extern.slf4j.Slf4j;
 @Component
 public class SqliteCascadeOrgSchemaMigrator {
 
-    /** 迁移键：三次增量合并登记，只用于人工排查"这个库升级到哪一步了" */
+    /** 迁移键：四次增量合并登记，只用于人工排查"这个库升级到哪一步了" */
     public static final String MIGRATION_KEY = "add-cascade-org-tree-and-path";
 
     private static final String ORG_TABLE          = "tb_cascade_org";
     private static final String CHANNEL_TABLE      = "tb_cascade_channel";
     private static final String ORG_COLUMN         = "org_path";
     private static final String CHANNEL_ORG_COLUMN = "cascade_org_id";
+    private static final String REVOKE_COLUMN      = "revoke_policy";
 
     private static final String CREATE_ORG_TABLE =
         "CREATE TABLE IF NOT EXISTS tb_cascade_org ("
@@ -60,7 +61,8 @@ public class SqliteCascadeOrgSchemaMigrator {
             + " cascade_org_id VARCHAR(64) NOT NULL,"
             + " org_name VARCHAR(255) NOT NULL,"
             + " sort_order INTEGER DEFAULT 0 NOT NULL,"
-            + " enabled INTEGER DEFAULT 1 NOT NULL)";
+            + " enabled INTEGER DEFAULT 1 NOT NULL,"
+            + " revoke_policy VARCHAR(16) DEFAULT 'CASCADE' NOT NULL)";
 
     /** 从每个根组织出发拼编码路径；只补 org_path 仍为空的记录 */
     private static final String BACKFILL_ORG_PATH =
@@ -105,6 +107,8 @@ public class SqliteCascadeOrgSchemaMigrator {
                 addColumnIfMissing(connection, ORG_TABLE, ORG_COLUMN, "VARCHAR(512) NOT NULL DEFAULT ''");
                 execute(connection, "CREATE INDEX IF NOT EXISTS idx_cascade_org_path"
                     + " ON tb_cascade_org (platform_id, org_path)");
+                /* 1.0.14：「取消同步」时其下通道的处置策略，历史行一律回落 CASCADE（连带剪掉） */
+                addColumnIfMissing(connection, ORG_TABLE, REVOKE_COLUMN, "VARCHAR(16) NOT NULL DEFAULT 'CASCADE'");
                 /* 回填放在加列之后、且只补空值：新库与已回填的库都是一条空操作的 UPDATE */
                 execute(connection, BACKFILL_ORG_PATH);
                 verify(connection);
@@ -121,11 +125,12 @@ public class SqliteCascadeOrgSchemaMigrator {
         }
     }
 
-    /** 校验结果：组织表、通道归属列、路径列都必须存在，否则宁可启动失败也不带病运行。 */
+    /** 校验结果：组织表、通道归属列、路径列、取消同步策略列都必须存在，否则宁可启动失败也不带病运行。 */
     private void verify(Connection connection) throws SQLException {
         requireTable(connection, ORG_TABLE);
         requireColumn(connection, CHANNEL_TABLE, CHANNEL_ORG_COLUMN);
         requireColumn(connection, ORG_TABLE, ORG_COLUMN);
+        requireColumn(connection, ORG_TABLE, REVOKE_COLUMN);
     }
 
     private void requireTable(Connection connection, String table) throws SQLException {

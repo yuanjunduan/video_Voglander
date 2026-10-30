@@ -824,6 +824,7 @@ CREATE TABLE `tb_cascade_org`
     `org_name`       VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '上报名称',
     `sort_order`     INT                                                   NOT NULL DEFAULT 0 COMMENT '同级排序',
     `enabled`        TINYINT                                               NOT NULL DEFAULT 1 COMMENT '1上报 0不上报(整棵子树剪掉)',
+    `revoke_policy`  VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT 'CASCADE' COMMENT '取消同步时通道处置：CASCADE连带删除/ REROUTE上浮挂域节点',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_cascade_org_code` (`platform_id`, `cascade_org_id`) USING BTREE,
     KEY `idx_cascade_org_parent` (`parent_org_id`) USING BTREE,

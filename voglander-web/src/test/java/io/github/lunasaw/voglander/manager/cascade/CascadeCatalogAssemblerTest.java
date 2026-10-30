@@ -176,6 +176,40 @@ class CascadeCatalogAssemblerTest {
     }
 
     @Test
+    @DisplayName("组织取消同步且策略为 CASCADE 时，其下通道不再进快照")
+    void revoked_org_with_cascade_policy_hides_channels() {
+        CascadeOrgDTO revoked = org(2L, null, ORG_SUB, "已取消");
+        revoked.setEnabled(0);
+        revoked.setRevokePolicy("CASCADE");
+        when(cascadeOrgManager.listEffective(PLATFORM_ID)).thenReturn(List.of());
+        when(cascadeOrgManager.indexById(any())).thenReturn(Map.of());
+        when(cascadeOrgManager.listByPlatformId(PLATFORM_ID)).thenReturn(List.of(revoked));
+        when(cascadeChannelManager.listByPlatformId(PLATFORM_ID)).thenReturn(List.of(channel(ORG_SUB)));
+
+        List<CascadeCatalogNode> nodes = assembler.assemble(PLATFORM_ID, PLATFORM_ID);
+
+        /* 只剩域节点：若跟着只发了 DEL 却不剪快照，下一次推快照（心跳/查询/重订阅）会把通道加回来 */
+        assertEquals(1, nodes.size(), "CASCADE 策略下通道必须一起消失: " + nodes);
+    }
+
+    @Test
+    @DisplayName("组织取消同步但策略为 REROUTE 时，通道改挂域节点继续上报")
+    void revoked_org_with_reroute_policy_keeps_channels() {
+        CascadeOrgDTO revoked = org(2L, null, ORG_SUB, "已取消");
+        revoked.setEnabled(0);
+        revoked.setRevokePolicy("REROUTE");
+        when(cascadeOrgManager.listEffective(PLATFORM_ID)).thenReturn(List.of());
+        when(cascadeOrgManager.indexById(any())).thenReturn(Map.of());
+        when(cascadeOrgManager.listByPlatformId(PLATFORM_ID)).thenReturn(List.of(revoked));
+        when(cascadeChannelManager.listByPlatformId(PLATFORM_ID)).thenReturn(List.of(channel(ORG_SUB)));
+
+        List<CascadeCatalogNode> nodes = assembler.assemble(PLATFORM_ID, PLATFORM_ID);
+
+        assertEquals(2, nodes.size(), "域节点 + 上浮的通道: " + nodes);
+        assertEquals(DOMAIN_ID, nodes.get(1).parentId(), "REROUTE 下通道改挂域节点");
+    }
+
+    @Test
     @DisplayName("通道项带上解析后的厂商/型号/IP/摄像机类型，域与组织节点不带")
     void channel_item_carries_resolved_meta() {
         when(channelMetaResolver.resolve(any())).thenReturn(Map.of(

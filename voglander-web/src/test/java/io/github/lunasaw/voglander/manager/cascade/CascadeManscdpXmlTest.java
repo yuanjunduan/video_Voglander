@@ -138,6 +138,32 @@ class CascadeManscdpXmlTest {
     }
 
     @Test
+    @DisplayName("目录变更：DEL 带 Name/ParentID，名称特殊字符转义")
+    void catalogEventNotify_del_withNameAndParent() {
+        String xml = CascadeManscdpXml.catalogEventNotify("34020000002000000001", "123",
+            new CascadeManscdpXml.CatalogEventItem("34020000002150000002", "主控中心<A&B>",
+                "34020000002150000001", "DEL"));
+
+        assertTrue(xml.contains("<Name>主控中心&lt;A&amp;B&gt;</Name>"), xml);
+        assertTrue(xml.contains("<ParentID>34020000002150000001</ParentID>"),
+            "不带 ParentID 上级无法定位删哪棵树: " + xml);
+        assertTrue(xml.contains("<Event>DEL</Event>"), xml);
+        assertTrue(xml.contains("<SumNum>1</SumNum>"), xml);
+        assertTrue(xml.contains("<DeviceList Num=\"1\">"), xml);
+    }
+
+    @Test
+    @DisplayName("目录变更：Name/ParentID 空值整段省略，不出现空标签")
+    void catalogEventNotify_omitsBlankFields() {
+        String xml = CascadeManscdpXml.catalogEventNotify("1", "1",
+            new CascadeManscdpXml.CatalogEventItem("34020000002150000002", null, "  ", "DEL"));
+
+        assertFalse(xml.contains("<Name>"), "空 Name 会让部分上级把节点名置空: " + xml);
+        assertFalse(xml.contains("<ParentID>"), "空 ParentID 会让上级判为非法父节点: " + xml);
+        assertTrue(xml.contains("<Event>DEL</Event>"), xml);
+    }
+
+    @Test
     @DisplayName("encode：声明与字节一致，GB2312 中文可回解")
     void encode_gb2312_declarationMatchesBytes() throws Exception {
         String xml = CascadeManscdpXml.broadcastResponse("1", "1", "OK")

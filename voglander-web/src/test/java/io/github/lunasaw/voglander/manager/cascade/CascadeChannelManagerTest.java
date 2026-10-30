@@ -85,6 +85,62 @@ class CascadeChannelManagerTest extends BaseTest {
     }
 
     @Nested
+    @DisplayName("revoke / publish - 单条通道取消与恢复同步")
+    class Revoke {
+
+        @Test
+        @DisplayName("取消同步保留记录，只把 enabled 置 0")
+        void revoke_should_keep_record() {
+            String platformId = UniqueKeyFactory.deviceId();
+            String channelId = UniqueKeyFactory.channelId();
+            Long id = cascadeChannelManager.add(buildDto(platformId, channelId));
+
+            assertTrue(cascadeChannelManager.revoke(id));
+
+            CascadeChannelDTO saved = cascadeChannelManager.getByPlatformAndChannel(platformId, channelId);
+            assertNotNull(saved, "取消同步不是删除，记录必须还在");
+            assertEquals(0, saved.getEnabled());
+        }
+
+        @Test
+        @DisplayName("取消同步幂等：重复调用不报错")
+        void revoke_should_be_idempotent() {
+            Long id = cascadeChannelManager.add(buildDto(UniqueKeyFactory.deviceId(), UniqueKeyFactory.channelId()));
+
+            assertTrue(cascadeChannelManager.revoke(id));
+            assertTrue(cascadeChannelManager.revoke(id));
+            assertEquals(0, cascadeChannelManager.getById(id).getEnabled());
+        }
+
+        @Test
+        @DisplayName("恢复同步：无组织归属时直接恢复上报")
+        void publish_should_restore_without_org() {
+            Long id = cascadeChannelManager.add(buildDto(UniqueKeyFactory.deviceId(), UniqueKeyFactory.channelId()));
+            cascadeChannelManager.revoke(id);
+
+            assertTrue(cascadeChannelManager.publish(id));
+
+            assertEquals(1, cascadeChannelManager.getById(id).getEnabled());
+        }
+
+        @Test
+        @DisplayName("update：enabled 1→0 与 revoke 等价，只改字段不删记录")
+        void update_should_toggle_enabled_without_deleting() {
+            String platformId = UniqueKeyFactory.deviceId();
+            String channelId = UniqueKeyFactory.channelId();
+            Long id = cascadeChannelManager.add(buildDto(platformId, channelId));
+
+            CascadeChannelDTO patch = new CascadeChannelDTO();
+            patch.setId(id);
+            patch.setEnabled(0);
+            assertTrue(cascadeChannelManager.update(patch));
+
+            assertNotNull(cascadeChannelManager.getByPlatformAndChannel(platformId, channelId));
+            assertEquals(0, cascadeChannelManager.getById(id).getEnabled());
+        }
+    }
+
+    @Nested
     @DisplayName("deleteOne - 删除")
     class Delete {
 

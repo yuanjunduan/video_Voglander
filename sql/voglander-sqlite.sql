@@ -793,7 +793,8 @@ CREATE TABLE tb_cascade_org
     cascade_org_id VARCHAR(64)                            NOT NULL,
     org_name       VARCHAR(255)                           NOT NULL,
     sort_order     INTEGER      DEFAULT 0                 NOT NULL,
-    enabled        INTEGER      DEFAULT 1                 NOT NULL
+    enabled        INTEGER      DEFAULT 1                 NOT NULL,
+    revoke_policy  VARCHAR(16)  DEFAULT 'CASCADE'         NOT NULL
 );
 CREATE UNIQUE INDEX uk_cascade_org_code ON tb_cascade_org (platform_id, cascade_org_id);
 CREATE INDEX idx_cascade_org_parent ON tb_cascade_org (parent_org_id);

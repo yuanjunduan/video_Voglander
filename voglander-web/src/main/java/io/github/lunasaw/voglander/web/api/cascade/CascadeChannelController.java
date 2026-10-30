@@ -74,12 +74,32 @@ public class CascadeChannelController {
     }
 
     @PutMapping("/{id}")
-    @Operation(summary = "更新级联通道映射")
+    @Operation(summary = "更新级联通道映射",
+        description = "enabled 1→0 会向上一级推 DEL 让通道消失，0→1 推 ADD；改组织归属会重推整棵目录")
     public AjaxResult<Boolean> update(@PathVariable Long id, @RequestBody CascadeChannelUpdateReq req) {
         CascadeChannelDTO dto = cascadeWebAssembler.toDTO(req);
         dto.setId(id);
         boolean ok = cascadeChannelManager.update(dto);
         return AjaxResult.success(ok);
+    }
+
+    /**
+     * 取消单条通道同步：不再上报，映射记录保留可恢复。
+     *
+     * <p>与删除的区别：删除是物理删除且不可恢复；取消同步随时可以恢复，
+     * 上级目录里的节点靠显式 DEL 移除（快照 upsert 不会因为节点「没出现」就删）。
+     */
+    @PostMapping("/{id}/revoke")
+    @Operation(summary = "取消该通道同步", description = "向上级推 Catalog Event=DEL，记录保留可恢复")
+    public AjaxResult<Boolean> revoke(@PathVariable Long id) {
+        return AjaxResult.success(cascadeChannelManager.revoke(id));
+    }
+
+    @PostMapping("/{id}/publish")
+    @Operation(summary = "恢复该通道同步",
+        description = "向上级推 Catalog Event=ADD；所属组织处于停报状态时拒绝，避免产生孤儿节点")
+    public AjaxResult<Boolean> publish(@PathVariable Long id) {
+        return AjaxResult.success(cascadeChannelManager.publish(id));
     }
 
     @DeleteMapping("/{id}")

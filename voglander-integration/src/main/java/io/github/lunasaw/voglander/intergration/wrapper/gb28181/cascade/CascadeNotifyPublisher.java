@@ -22,6 +22,7 @@ import io.github.lunasaw.sip.common.transmit.SipSender;
 import io.github.lunasaw.sip.common.transmit.request.SipRequestBuilderFactory;
 import io.github.lunasaw.sip.common.utils.SipRequestUtils;
 import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.SubType;
+import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
 import io.github.lunasaw.voglander.common.event.LocalMobilePositionEvent;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
@@ -63,6 +64,16 @@ public class CascadeNotifyPublisher {
     /** 单条目录 NOTIFY 容纳的通道数（yml 回落值），与 {@code CascadeQueryHandler} 共用同一配置项 */
     @Value("${gateway.cascade.catalog.batch-size:50}")
     private int catalogBatchSize = 50;
+
+    /**
+     * 组织取消同步（{@code REROUTE}）时，通道改挂域节点所采用的协议动作。
+     *
+     * <p>{@code UPDATE}：直接发 {@code Event=UPDATE} 并把 {@code ParentID} 改成域编码，
+     * 报文数最少。{@code DEL_ADD}：先删旧节点再以新父节点新增，兼容不认同「UPDATE 改父」的上级。
+     * 两种都依赖上级实现，切换成本为零，因此做成配置而非改代码。
+     */
+    @Value("${gateway.cascade.catalog.reparent-mode:UPDATE}")
+    private String reparentMode = "UPDATE";
 
     /**
      * 推送一次<b>完整目录快照</b>（GB28181 §9.11 Catalog NOTIFY）。
@@ -221,28 +232,119 @@ public class CascadeNotifyPublisher {
      * @param cascadeId  被删节点的上级编码（组织编码 / 级联通道编码）
      */
     public void pushCatalogDelete(String platformId, String cascadeId) {
-        if (StringUtils.isBlank(platformId) || StringUtils.isBlank(cascadeId)) {
-            return;
+        pushCatalogDeleteBatch(platformId,
+            List.of(new LocalCascadeCatalogChangeEvent.Node(cascadeId, null, null)));
+    }
+
+    /**
+     * 批量删除目录节点 → 向上级逐条发 {@code Event=DEL}。
+     *
+     * <p><b>为什么逐条发而不是攒成一个包</b>：参考实现（CSS {@code notifyOrgDeltaData}）就是
+     * 一条一个 {@code SumNum=1} 的 NOTIFY；海康对「一包多 Item 的删除」没有实测结论，
+     * 逐条发至少能保证单个节点失败不影响其余，报文也能带上各自的 {@code Name}/{@code ParentID}。
+     *
+     * <p><b>调用方必须保证清单已按「叶子 → 根」后序排好</b>：先删父会让子节点变成孤儿，
+     * 部分上级直接忽略对该子节点的后续删除。
+     *
+     * @param nodes 待删除节点，已排好序；空清单直接返回
+     * @return 实际发出的报文条数
+     */
+    public int pushCatalogDeleteBatch(String platformId, List<LocalCascadeCatalogChangeEvent.Node> nodes) {
+        if (StringUtils.isBlank(platformId) || nodes == null || nodes.isEmpty()) {
+            return 0;
         }
         CascadePlatformDTO platform = cascadePlatformManager.getByPlatformId(platformId);
         if (platform == null) {
             log.warn("目录删除通知跳过，找不到上级平台配置: platformId={}", platformId);
-            return;
+            return 0;
         }
         Endpoint ep = endpoint(platform);
         if (ep == null) {
-            return;
+            return 0;
         }
         String domainId = catalogAssembler.resolveDomainId(platform, ep.from.getUserId());
-        String sn = String.valueOf(System.currentTimeMillis() % 1_000_000);
-        String eventId = resolveCatalogEventId(platformId, sn);
-        try {
-            String callId = sendIsolated(ep,
-                CascadeManscdpXml.catalogEventNotify(domainId, sn, cascadeId, "DEL"), eventId);
-            log.info("推送目录删除通知: platformId={}, cascadeId={}, callId={}", platformId, cascadeId, callId);
-        } catch (Exception e) {
-            log.error("推送目录删除通知失败: platformId={}, cascadeId={}", platformId, cascadeId, e);
+        String eventId = resolveCatalogEventId(platformId, nextSn());
+        int sent = 0;
+        for (LocalCascadeCatalogChangeEvent.Node node : nodes) {
+            if (node == null || StringUtils.isBlank(node.cascadeId())) {
+                continue;
+            }
+            try {
+                String callId = sendIsolated(ep, CascadeManscdpXml.catalogEventNotify(domainId, nextSn(),
+                    new CascadeManscdpXml.CatalogEventItem(node.cascadeId(), node.name(),
+                        /* 根组织没有父组织编码，落到域节点才能让上级定位到树 */
+                        StringUtils.defaultIfBlank(node.parentCode(), domainId), "DEL")),
+                    eventId);
+                sent++;
+                log.info("推送目录删除通知: platformId={}, cascadeId={}, callId={}",
+                    platformId, node.cascadeId(), callId);
+            } catch (Exception e) {
+                /* 单条失败不打断整批：后续节点仍要删，否则上级目录会残留半棵子树 */
+                log.error("推送目录删除通知失败: platformId={}, cascadeId={}",
+                    platformId, node.cascadeId(), e);
+            }
         }
+        return sent;
+    }
+
+    /**
+     * 通道改挂域节点（组织「取消同步」选 {@code REROUTE} 时用）。
+     *
+     * <p>上级没有「移动节点」语义，{@code ParentID} 变更只能靠更新父指针表达。
+     * 动作由 {@code gateway.cascade.catalog.reparent-mode} 决定：
+     * {@code UPDATE} 一包搞定；{@code DEL_ADD} 先删旧父下的节点再以域节点为父新增。
+     *
+     * @param nodes 通道节点；{@code parentCode} 为原父组织编码（{@code DEL_ADD} 模式需要）
+     * @return 实际发出的报文条数
+     */
+    public int pushCatalogReparent(String platformId, List<LocalCascadeCatalogChangeEvent.Node> nodes) {
+        if (StringUtils.isBlank(platformId) || nodes == null || nodes.isEmpty()) {
+            return 0;
+        }
+        CascadePlatformDTO platform = cascadePlatformManager.getByPlatformId(platformId);
+        if (platform == null) {
+            log.warn("目录改挂通知跳过，找不到上级平台配置: platformId={}", platformId);
+            return 0;
+        }
+        Endpoint ep = endpoint(platform);
+        if (ep == null) {
+            return 0;
+        }
+        String domainId = catalogAssembler.resolveDomainId(platform, ep.from.getUserId());
+        String eventId = resolveCatalogEventId(platformId, nextSn());
+        boolean delAdd = "DEL_ADD".equalsIgnoreCase(reparentMode);
+        int sent = 0;
+        for (LocalCascadeCatalogChangeEvent.Node node : nodes) {
+            if (node == null || StringUtils.isBlank(node.cascadeId())) {
+                continue;
+            }
+            try {
+                if (delAdd) {
+                    sendIsolated(ep, CascadeManscdpXml.catalogEventNotify(domainId, nextSn(),
+                        new CascadeManscdpXml.CatalogEventItem(node.cascadeId(), node.name(), node.parentCode(), "DEL")),
+                        eventId);
+                    sendIsolated(ep, CascadeManscdpXml.catalogEventNotify(domainId, nextSn(),
+                        new CascadeManscdpXml.CatalogEventItem(node.cascadeId(), node.name(), domainId, "ADD")),
+                        eventId);
+                    sent += 2;
+                } else {
+                    sendIsolated(ep, CascadeManscdpXml.catalogEventNotify(domainId, nextSn(),
+                        new CascadeManscdpXml.CatalogEventItem(node.cascadeId(), node.name(), domainId, "UPDATE")),
+                        eventId);
+                    sent++;
+                }
+                log.info("推送目录改挂通知: platformId={}, cascadeId={}, mode={}",
+                    platformId, node.cascadeId(), delAdd ? "DEL_ADD" : "UPDATE");
+            } catch (Exception e) {
+                log.error("推送目录改挂通知失败: platformId={}, cascadeId={}", platformId, node.cascadeId(), e);
+            }
+        }
+        return sent;
+    }
+
+    /** 目录变更通知的 SN：与快照一致用时间戳取模，保证单次调用内不重复且不长于 6 位 */
+    private String nextSn() {
+        return String.valueOf(System.currentTimeMillis() % 1_000_000);
     }
 
     /** 告警 → 推送所有订阅了 Alarm 的上级。 */

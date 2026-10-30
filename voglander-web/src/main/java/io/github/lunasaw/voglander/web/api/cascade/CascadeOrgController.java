@@ -1,5 +1,6 @@
 package io.github.lunasaw.voglander.web.api.cascade;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,11 +17,17 @@ import org.springframework.web.bind.annotation.RestController;
 import io.github.lunasaw.voglander.common.constant.ApiConstant;
 import io.github.lunasaw.voglander.common.domain.AjaxResult;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeRevokePreviewDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
 import io.github.lunasaw.voglander.web.api.cascade.assembler.CascadeWebAssembler;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeOrgCreateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeOrgUpdateReq;
+import io.github.lunasaw.voglander.web.api.cascade.req.CascadeRevokeBatchReq;
+import io.github.lunasaw.voglander.web.api.cascade.req.CascadeRevokeReq;
+import io.github.lunasaw.voglander.web.api.cascade.resp.CascadeRevokeBatchResp;
+import io.github.lunasaw.voglander.web.api.cascade.support.CascadeDeliveryGate;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeOrgVO;
+import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeRevokePreviewVO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
@@ -46,6 +53,9 @@ public class CascadeOrgController {
     @Autowired
     private CascadeWebAssembler  cascadeWebAssembler;
 
+    @Autowired
+    private CascadeDeliveryGate  cascadeDeliveryGate;
+
     @PostMapping
     @Operation(summary = "新增级联组织", description = "组织编码由后端按国标规则生成，返回新增记录 id")
     public AjaxResult<Long> add(@RequestBody CascadeOrgCreateReq req) {
@@ -55,7 +65,8 @@ public class CascadeOrgController {
     }
 
     @PutMapping("/{id}")
-    @Operation(summary = "更新级联组织", description = "只允许改名称/排序/启停，父节点与编码不可变")
+    @Operation(summary = "更新级联组织",
+        description = "只允许改名称/排序/启停与通道处置策略；1→0 会连带整棵子树从上级目录移除")
     public AjaxResult<Boolean> update(@PathVariable Long id, @RequestBody CascadeOrgUpdateReq req) {
         CascadeOrgDTO dto = cascadeWebAssembler.toDTO(req);
         dto.setId(id);
@@ -116,5 +127,78 @@ public class CascadeOrgController {
         }
         List<CascadeOrgDTO> dtos = cascadeOrgManager.listSubtree(org.getPlatformId(), org.getCascadeOrgId(), includeSelf);
         return AjaxResult.success(cascadeWebAssembler.toVOList(dtos));
+    }
+
+    /**
+     * 取消同步的影响面预览。<b>只算不写</b>，供前端弹窗先告知后果再让用户确认。
+     *
+     * <p>为什么必须单独一个接口：{@code enabled} 是“整棵子树不进目录”，一个开关背后可能是
+     * 几十个节点消失。没有预览，用户点完才发现一片区域不见了，而且取消同步之后
+     * 通道是「一起消失」还是「上浮到根节点」两种归宿完全相反，必须让人看到再选。
+     */
+    @GetMapping("/{id}/revoke/preview")
+    @Operation(summary = "取消同步影响面预览",
+        description = "返回将被移除的组织/通道清单与投递风险提示；policy 传 CASCADE/REROUTE 可预览不同策略的差异")
+    public AjaxResult<CascadeRevokePreviewVO> previewRevoke(@PathVariable Long id,
+        @RequestParam(required = false) String policy) {
+        CascadeRevokePreviewDTO dto = cascadeOrgManager.previewRevoke(id, policy);
+        CascadeRevokePreviewVO vo = cascadeWebAssembler.toVO(dto);
+        CascadeDeliveryGate.Report report = cascadeDeliveryGate.check(dto.getPlatformId());
+        vo.setPlatformOnline(report.platformOnline());
+        vo.setCatalogSubscribed(report.catalogSubscribed());
+        vo.setDeliverable(report.deliverable());
+        vo.setWarnings(new ArrayList<>(report.warnings()));
+        return AjaxResult.success(vo);
+    }
+
+    @PostMapping("/{id}/revoke")
+    @Operation(summary = "取消同步该组织",
+        description = "整棵子树从上级目录移除，本地数据一条不删；policy 决定通道是一并移除还是改挂域节点")
+    public AjaxResult<Boolean> revoke(@PathVariable Long id, @RequestBody(required = false) CascadeRevokeReq req) {
+        String policy = req == null ? null : req.getPolicy();
+        return AjaxResult.success(cascadeOrgManager.revoke(id, policy));
+    }
+
+    @PostMapping("/{id}/publish")
+    @Operation(summary = "恢复同步该组织",
+        description = "上级目录靠快照 upsert 把整棵子树加回来；祖先处于停报状态时拒绝")
+    public AjaxResult<Boolean> publish(@PathVariable Long id) {
+        return AjaxResult.success(cascadeOrgManager.publish(id));
+    }
+
+    /**
+     * 批量取消同步。
+     *
+     * <p>逐条独立执行、逐条回结果：报文是单向的，一条失败不回滚其他已经推给上级的 DEL，
+     * 否则会出现「本地显示在上报、上级其实已经删了」的错位。
+     */
+    @PostMapping("/revoke/batch")
+    @Operation(summary = "批量取消同步组织",
+        description = "逐条独立执行，不做事务回滚；返回每条的成功/失败原因，便于精确重试")
+    public AjaxResult<CascadeRevokeBatchResp> revokeBatch(@RequestBody CascadeRevokeBatchReq req) {
+        CascadeRevokeBatchResp resp = new CascadeRevokeBatchResp();
+        List<Long> ids = req == null || req.getIds() == null ? List.of() : req.getIds();
+        resp.setTotal(ids.size());
+        int succeeded = 0;
+        for (Long id : ids) {
+            CascadeRevokeBatchResp.Item item = new CascadeRevokeBatchResp.Item();
+            item.setId(id);
+            try {
+                CascadeOrgDTO org = cascadeOrgManager.getById(id);
+                item.setOrgName(org == null ? null : org.getOrgName());
+                item.setOk(cascadeOrgManager.revoke(id, req.getPolicy()));
+                if (Boolean.TRUE.equals(item.getOk())) {
+                    succeeded++;
+                }
+            } catch (RuntimeException e) {
+                /* 单条失败不能中断整批：后端记录已改的就改了，结果如实回传 */
+                item.setOk(false);
+                item.setMessage(e.getMessage());
+            }
+            resp.getItems().add(item);
+        }
+        resp.setSucceeded(succeeded);
+        resp.setFailed(ids.size() - succeeded);
+        return AjaxResult.success(resp);
     }
 }

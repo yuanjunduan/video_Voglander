@@ -2,9 +2,11 @@ package io.github.lunasaw.voglander.web.api.cascade.assembler;
 
 import org.springframework.stereotype.Component;
 
+import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeRevokePreviewDTO;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelBatchBindReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelCreateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelPageReq;
@@ -15,6 +17,7 @@ import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformCreateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformPageReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformUpdateReq;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeOrgVO;
+import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeRevokePreviewVO;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -179,6 +182,7 @@ public class CascadeWebAssembler {
         dto.setOrgName(req.getOrgName());
         dto.setSortOrder(req.getSortOrder());
         dto.setEnabled(req.getEnabled());
+        dto.setRevokePolicy(req.getRevokePolicy());
         return dto;
     }
 
@@ -194,6 +198,7 @@ public class CascadeWebAssembler {
         dto.setOrgName(req.getOrgName());
         dto.setSortOrder(req.getSortOrder());
         dto.setEnabled(req.getEnabled());
+        dto.setRevokePolicy(req.getRevokePolicy());
         return dto;
     }
 
@@ -217,6 +222,7 @@ public class CascadeWebAssembler {
         vo.setOrgName(dto.getOrgName());
         vo.setSortOrder(dto.getSortOrder());
         vo.setEnabled(dto.getEnabled());
+        vo.setRevokePolicy(dto.getRevokePolicy());
         vo.setChannelCount(dto.getChannelCount());
         if (dto.getChildren() != null) {
             List<CascadeOrgVO> children = new ArrayList<>(dto.getChildren().size());
@@ -238,6 +244,48 @@ public class CascadeWebAssembler {
         }
         for (CascadeOrgDTO dto : dtos) {
             list.add(toVO(dto));
+        }
+        return list;
+    }
+
+    /**
+     * 取消同步影响面 DTO → VO。
+     *
+     * <p>数量字段在这里一次算好再下发，避免前端各自 {@code length} 统计出现口径不一致；
+     * 投递条件（{@code platformOnline} / {@code catalogSubscribed} / {@code warnings}）
+     * 由 Controller 探明后回填，装配层不依赖运行时组件。
+     */
+    public CascadeRevokePreviewVO toVO(CascadeRevokePreviewDTO dto) {
+        if (dto == null) {
+            return null;
+        }
+        CascadeRevokePreviewVO vo = new CascadeRevokePreviewVO();
+        vo.setPlatformId(dto.getPlatformId());
+        vo.setCascadeOrgId(dto.getCascadeOrgId());
+        vo.setOrgName(dto.getOrgName());
+        vo.setRevokePolicy(dto.getRevokePolicy());
+        vo.setOrgs(toNodeVOList(dto.getOrgs()));
+        vo.setChannels(toNodeVOList(dto.getChannels()));
+        vo.setOrgCount(dto.orgCount());
+        vo.setChannelCount(dto.channelCount());
+        vo.setDeleteCount(dto.deleteCount());
+        return vo;
+    }
+
+    private List<CascadeRevokePreviewVO.NodeVO> toNodeVOList(List<LocalCascadeCatalogChangeEvent.Node> nodes) {
+        List<CascadeRevokePreviewVO.NodeVO> list = new ArrayList<>();
+        if (nodes == null) {
+            return list;
+        }
+        for (LocalCascadeCatalogChangeEvent.Node node : nodes) {
+            if (node == null) {
+                continue;
+            }
+            CascadeRevokePreviewVO.NodeVO vo = new CascadeRevokePreviewVO.NodeVO();
+            vo.setCascadeId(node.cascadeId());
+            vo.setName(node.name());
+            vo.setParentId(node.parentCode());
+            list.add(vo);
         }
         return list;
     }

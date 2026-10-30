@@ -52,4 +52,11 @@ public class CascadeOrgDO implements Serializable {
     private Integer       sortOrder;
     /** 1-上报 0-不上报（整棵子树剪掉） */
     private Integer       enabled;
+    /**
+     * 取消同步时其下通道的处置策略：CASCADE-通道一并取消 / REROUTE-通道上浮挂域节点。
+     *
+     * <p>两种策略的协议动作完全不同（CASCADE 连带 DEL 通道，REROUTE 只 DEL 组织并改父），
+     * 事后无法从 {@code enabled} 反推，必须落库。空值按 CASCADE 处理。
+     */
+    private String        revokePolicy;
 }

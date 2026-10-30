@@ -20,11 +20,13 @@ import org.springframework.util.Assert;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
+import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.RevokePolicy;
 import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
 import io.github.lunasaw.voglander.manager.assembler.CascadeAssembler;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeRevokePreviewDTO;
 import io.github.lunasaw.voglander.manager.service.CascadeChannelService;
 import io.github.lunasaw.voglander.manager.service.CascadeOrgService;
 import io.github.lunasaw.voglander.repository.entity.CascadeChannelDO;
@@ -93,6 +95,7 @@ public class CascadeOrgManager {
         if (dto.getSortOrder() == null) {
             dto.setSortOrder(0);
         }
+        dto.setRevokePolicy(RevokePolicy.normalize(dto.getRevokePolicy()));
         CascadeOrgDO doObj = CascadeAssembler.toDO(dto);
         cascadeOrgService.save(doObj);
         log.info("新增级联组织: platformId={}, orgName={}, cascadeOrgId={}, parentOrgId={}",
@@ -107,6 +110,10 @@ public class CascadeOrgManager {
      * <p><b>父节点与编码都不可变</b>：改父节点等于在上级侧把节点从一棵树挪到另一棵，
      * 上级没有"移动"语义，只会表现为旧节点消失、新节点出现，通道引用随之失效。
      * 真要调整层级，删除后重建并重新绑定通道。
+     *
+     * <p><b>启停不只是改字段</b>：{@code 1 -> 0} 会把整棵子树从上级目录里移除，必须显式推
+     * {@code Event=DEL}（快照是增量 upsert 语义，不会因为节点「这次没出现」就删掉它），
+     * 因此这里直接转到 {@link #revoke} 的处理链路；{@code 0 -> 1} 则重推快照让节点回来。
      */
     public boolean update(CascadeOrgDTO dto) {
         Assert.notNull(dto, "dto 不能为空");
@@ -119,14 +126,226 @@ public class CascadeOrgManager {
         update.setOrgName(StringUtils.defaultIfBlank(dto.getOrgName(), existed.getOrgName()));
         update.setSortOrder(dto.getSortOrder() != null ? dto.getSortOrder() : existed.getSortOrder());
         update.setEnabled(dto.getEnabled() != null ? dto.getEnabled() : existed.getEnabled());
+        if (StringUtils.isNotBlank(dto.getRevokePolicy())) {
+            update.setRevokePolicy(RevokePolicy.normalize(dto.getRevokePolicy()));
+        }
         boolean ok = cascadeOrgService.updateById(update);
         log.info("更新级联组织: id={}, cascadeOrgId={}, orgName={}, enabled={}",
             dto.getId(), existed.getCascadeOrgId(), update.getOrgName(), update.getEnabled());
+
+        /* 改名只影响节点自身，但改启停会连带整棵子树进出目录，两条链路完全不同 */
         if (ok) {
-            /* 改名只影响节点自身，但改启停会连带整棵子树进出目录，统一按结构变更处理 */
-            publishCatalogChange(existed.getPlatformId(), existed.getCascadeOrgId(), "UPDATE");
+            boolean wasEnabled = existed.getEnabled() == null || existed.getEnabled() == 1;
+            boolean nowEnabled = update.getEnabled() == null || update.getEnabled() == 1;
+            if (wasEnabled && !nowEnabled) {
+                publishRevoke(existed, update.getRevokePolicy());
+            } else {
+                /* 重推快照即可：{@code 0 -> 1} 靠 upsert 把节点加回来，改名同理 */
+                publishCatalogChange(existed.getPlatformId(), existed.getCascadeOrgId(), "UPDATE");
+            }
         }
         return ok;
+    }
+
+    /**
+     * 取消同步的影响面预览：算出这次会把哪些节点从上级目录里摘掉。
+     *
+     * <p>只做计算，不落库不发报文——用户在确认框里看到数量才决定要不要执行。
+     *
+     * @param id     组织主键
+     * @param policy 通道处置策略，空则用组织上已保存的值
+     * @return 影响面；组织不存在时抛 {@link IllegalArgumentException}
+     */
+    public CascadeRevokePreviewDTO previewRevoke(Long id, String policy) {
+        CascadeOrgDTO org = getById(id);
+        Assert.notNull(org, "组织不存在: id=" + id);
+
+        CascadeRevokePreviewDTO preview = new CascadeRevokePreviewDTO();
+        preview.setPlatformId(org.getPlatformId());
+        preview.setCascadeOrgId(org.getCascadeOrgId());
+        preview.setOrgName(org.getOrgName());
+        String effective = RevokePolicy.normalize(
+            StringUtils.isNotBlank(policy) ? policy : org.getRevokePolicy());
+        preview.setRevokePolicy(effective);
+
+        List<CascadeOrgDTO> subtree = postOrderSubtree(org);
+        List<CascadeChannelDTO> channels = listEffectiveChannels(org.getPlatformId(), subtree);
+        Map<Long, CascadeOrgDTO> byId = indexById(subtree);
+        for (CascadeOrgDTO node : subtree) {
+            preview.getOrgs().add(orgNode(node, byId));
+        }
+        for (CascadeChannelDTO channel : channels) {
+            preview.getChannels().add(channelNode(channel));
+        }
+        return preview;
+    }
+
+    /**
+     * 取消同步：把整棵子树从上级目录里移除（本地数据一条不删）。
+     *
+     * <p>与 {@link #delete} 的区别：删除是物理删除且不可恢复，还要先满足"无子组织、无绑定通道"；
+     * 取消同步只是不再上报，组织树与通道映射全部保留，随时可以恢复。
+     *
+     * @param id     组织主键
+     * @param policy 通道处置策略：{@code CASCADE} 通道一起移除 / {@code REROUTE} 通道改挂域节点
+     * @return 是否变更（已处于停报状态时幂等返回 true）
+     */
+    public boolean revoke(Long id, String policy) {
+        CascadeOrgDTO org = getById(id);
+        Assert.notNull(org, "组织不存在: id=" + id);
+        String effective = RevokePolicy.normalize(
+            StringUtils.isNotBlank(policy) ? policy : org.getRevokePolicy());
+
+        CascadeOrgDO patch = new CascadeOrgDO();
+        patch.setId(id);
+        patch.setEnabled(0);
+        patch.setRevokePolicy(effective);
+        boolean ok = cascadeOrgService.updateById(patch);
+        if (!ok) {
+            return false;
+        }
+        log.info("取消级联组织同步: id={}, cascadeOrgId={}, orgName={}, policy={}",
+            id, org.getCascadeOrgId(), org.getOrgName(), effective);
+        publishRevoke(org, effective);
+        return true;
+    }
+
+    /**
+     * 恢复同步：重新上报，上级目录靠快照 upsert 把节点加回来。
+     *
+     * <p>不需要反向发 {@code ADD}：快照对上级就是新增/更新，重推一次整棵树最稳。
+     *
+     * @param id 组织主键
+     * @return 是否变更（已处于上报状态时幂等返回 true）
+     */
+    public boolean publish(Long id) {
+        CascadeOrgDTO org = getById(id);
+        Assert.notNull(org, "组织不存在: id=" + id);
+
+        /* 祖先是停报状态时坚持恢复只会得到一棵挂不上去的子树，必须在入口拦下 */
+        if (org.getParentOrgId() != null) {
+            CascadeOrgDTO parent = getById(org.getParentOrgId());
+            Assert.isTrue(parent == null || isEffectivelyEnabled(parent, indexById(listByPlatformId(org.getPlatformId()))),
+                "上级组织【" + (parent == null ? org.getParentOrgId() : parent.getOrgName())
+                    + "】处于停报状态，请先恢复它");
+        }
+
+        CascadeOrgDO patch = new CascadeOrgDO();
+        patch.setId(id);
+        patch.setEnabled(1);
+        boolean ok = cascadeOrgService.updateById(patch);
+        if (ok) {
+            log.info("恢复级联组织同步: id={}, cascadeOrgId={}, orgName={}",
+                id, org.getCascadeOrgId(), org.getOrgName());
+            publishCatalogChange(org.getPlatformId(), org.getCascadeOrgId(), "UPDATE");
+        }
+        return ok;
+    }
+
+    /**
+     * 发布「取消同步」事件：通道先删、组织按叶子到根删，最后重推一次已裁剪的快照。
+     *
+     * <p>{@code REROUTE} 只删组织，另外发一次改挂事件把通道的父节点改成域节点：
+     * 拆成两个事件而不是一个，是因为两者失败原因不同（删组织 vs 改父），
+     * 日志里能分开定位是哪个环节出的问题。
+     */
+    private void publishRevoke(CascadeOrgDTO org, String policy) {
+        if (eventPublisher == null || org == null || StringUtils.isBlank(org.getPlatformId())) {
+            return;
+        }
+        String effective = RevokePolicy.normalize(policy);
+        List<CascadeOrgDTO> subtree = postOrderSubtree(org);
+        List<CascadeChannelDTO> channels = listEffectiveChannels(org.getPlatformId(), subtree);
+        Map<Long, CascadeOrgDTO> byId = indexById(subtree);
+
+        List<LocalCascadeCatalogChangeEvent.Node> orgNodes = subtree.stream()
+            .map(node -> orgNode(node, byId))
+            .collect(Collectors.toList());
+        List<LocalCascadeCatalogChangeEvent.Node> channelNodes = channels.stream()
+            .map(this::channelNode)
+            .collect(Collectors.toList());
+
+        if (RevokePolicy.REROUTE.equals(effective)) {
+            /* 组织先删（后序），通道随后改挂；通道不删，因此不进 DEL 清单 */
+            eventPublisher.publishEvent(new LocalCascadeCatalogChangeEvent(org.getPlatformId(), "ORG",
+                org.getCascadeOrgId(), "DEL", orgNodes));
+            if (!channelNodes.isEmpty()) {
+                eventPublisher.publishEvent(new LocalCascadeCatalogChangeEvent(org.getPlatformId(), "CHANNEL",
+                    org.getCascadeOrgId(), "REPARENT", channelNodes));
+            }
+            return;
+        }
+
+        /* CASCADE：通道必须排在组织之前，否则删父会让通道变成孤儿节点 */
+        List<LocalCascadeCatalogChangeEvent.Node> all = new ArrayList<>(channelNodes);
+        all.addAll(orgNodes);
+        eventPublisher.publishEvent(new LocalCascadeCatalogChangeEvent(org.getPlatformId(), "ORG",
+            org.getCascadeOrgId(), "DEL", all));
+    }
+
+    /** 组织 → 目录节点。父编码由 {@code byId} 解析；根组织留空，由发送方回落域编码 */
+    private LocalCascadeCatalogChangeEvent.Node orgNode(CascadeOrgDTO org, Map<Long, CascadeOrgDTO> byId) {
+        return new LocalCascadeCatalogChangeEvent.Node(
+            org.getCascadeOrgId(), org.getOrgName(), resolveParentCode(org, byId, null));
+    }
+
+    /** 通道 → 目录节点（parentCode 为当前所属组织，REROUTE 的 DEL_ADD 模式需要） */
+    private LocalCascadeCatalogChangeEvent.Node channelNode(CascadeChannelDTO channel) {
+        return new LocalCascadeCatalogChangeEvent.Node(
+            channel.getCascadeChannelId(), channel.getCascadeName(), channel.getCascadeOrgId());
+    }
+
+    /**
+     * 子树内<b>上报中</b>的通道：已停报的通道上级那里早就没有，不必再发 DEL。
+     */
+    private List<CascadeChannelDTO> listEffectiveChannels(String platformId, List<CascadeOrgDTO> subtree) {
+        Set<String> codes = subtree.stream()
+            .map(CascadeOrgDTO::getCascadeOrgId)
+            .filter(StringUtils::isNotBlank)
+            .collect(Collectors.toSet());
+        if (codes.isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<CascadeChannelDTO> channels = cascadeChannelService.list(
+            new LambdaQueryWrapper<CascadeChannelDO>()
+                .eq(CascadeChannelDO::getPlatformId, platformId)
+                .eq(CascadeChannelDO::getEnabled, 1))
+            .stream().map(CascadeAssembler::toDTO).collect(Collectors.toList());
+        return channels.stream()
+            .filter(c -> codes.contains(c.getCascadeOrgId()))
+            .sorted(Comparator.comparing((CascadeChannelDTO c) -> StringUtils.defaultString(c.getCascadeOrgId()))
+                .thenComparing(c -> StringUtils.defaultString(c.getCascadeChannelId())))
+            .collect(Collectors.toList());
+    }
+
+    /**
+     * 子树<b>后序</b>排列：先子后父，保证删除时父节点在子节点之后消失。
+     *
+     * <p>用 {@code parentOrgId} 邻接表做 DFS 而不靠 {@code orgPath}：历史库可能还没回填路径，
+     * 依赖路径排序会在半张树上退化成平坦列表，顺序错乱。
+     */
+    private List<CascadeOrgDTO> postOrderSubtree(CascadeOrgDTO root) {
+        List<CascadeOrgDTO> all = listByPlatformId(root.getPlatformId());
+        Map<Long, List<CascadeOrgDTO>> childrenByParent = all.stream()
+            .filter(o -> o.getParentOrgId() != null)
+            .collect(Collectors.groupingBy(CascadeOrgDTO::getParentOrgId));
+        List<CascadeOrgDTO> ordered = new ArrayList<>();
+        collectPostOrder(root, childrenByParent, ordered, new HashSet<>());
+        return ordered;
+    }
+
+    private void collectPostOrder(CascadeOrgDTO node, Map<Long, List<CascadeOrgDTO>> childrenByParent,
+        List<CascadeOrgDTO> out, Set<Long> visited) {
+        if (node == null || node.getCascadeOrgId() == null) {
+            return;
+        }
+        if (node.getId() != null && !visited.add(node.getId())) {
+            return;
+        }
+        for (CascadeOrgDTO child : childrenByParent.getOrDefault(node.getId(), new ArrayList<>())) {
+            collectPostOrder(child, childrenByParent, out, visited);
+        }
+        out.add(node);
     }
 
     /**

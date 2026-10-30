@@ -41,4 +41,9 @@ public class CascadeOrgCreateReq implements Serializable {
      * 是否上报 1上报 / 0不上报（停用会连带整棵子树一起从目录中剪掉）
      */
     private Integer enabled;
+
+    /**
+     * 取消同步时其下通道的处置策略：CASCADE-通道一并取消（默认）/ REROUTE-通道上浮挂域节点
+     */
+    private String  revokePolicy;
 }
