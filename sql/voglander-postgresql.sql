@@ -35,11 +35,13 @@ CREATE TABLE tb_device
     register_time  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     keepalive_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     server_ip      varchar(255) NOT NULL,
+    org_id         bigint       DEFAULT NULL,
     extend         text,
     PRIMARY KEY (id),
     UNIQUE (device_id),
     -- Phase 2a：状态/心跳查询与离线扫描的支撑索引（修 P8 全表扫）
 );
+CREATE INDEX idx_device_org ON tb_device (org_id);
 
 -- ----------------------------
 -- Table structure for tb_device_channel
@@ -701,28 +703,67 @@ CREATE INDEX idx_cascade_channel_org ON tb_cascade_channel (platform_id, cascade
 
 -- ----------------------------
 -- Table structure for tb_cascade_org  (级联组织树)
--- 上级按 Item/ParentID 建目录树，通道必须挂在组织节点下才可见；
--- 每平台一套独立组织，与本地部门(tb_dept)解耦。
+-- 本地资产，全局一套，不绑定上级平台；推给哪些平台由 tb_cascade_publish 表达。
+-- 上级按 Item/ParentID 建目录树，通道必须挂在设备节点下才可见。
 -- ----------------------------
 DROP TABLE IF EXISTS tb_cascade_org;
 CREATE TABLE tb_cascade_org
 (
-    id             BIGSERIAL,
-    create_time    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    update_time    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    platform_id    VARCHAR(64)  NOT NULL,
-    parent_org_id  BIGINT       DEFAULT NULL,
-    org_path       VARCHAR(512) NOT NULL DEFAULT '',
-    cascade_org_id VARCHAR(64)  NOT NULL,
-    org_name       VARCHAR(255) NOT NULL,
-    sort_order     INT          NOT NULL DEFAULT 0,
-    enabled        SMALLINT     NOT NULL DEFAULT 1,
-    revoke_policy  VARCHAR(16)  NOT NULL DEFAULT 'CASCADE',
+    id                BIGSERIAL,
+    create_time       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    parent_org_id     BIGINT       DEFAULT NULL,
+    org_path          VARCHAR(512) NOT NULL DEFAULT '',
+    org_code          VARCHAR(64)  NOT NULL,
+    org_name          VARCHAR(255) NOT NULL,
+    sort_order        INT          NOT NULL DEFAULT 0,
+    enabled           SMALLINT     NOT NULL DEFAULT 1,
+    revoke_policy     VARCHAR(16)  NOT NULL DEFAULT 'CASCADE',
+    code_province     VARCHAR(2)   DEFAULT NULL,
+    code_city         VARCHAR(2)   DEFAULT NULL,
+    code_county       VARCHAR(4)   DEFAULT NULL,
+    code_industry     VARCHAR(2)   DEFAULT NULL,
+    code_type         VARCHAR(3)   DEFAULT NULL,
+    code_network      VARCHAR(1)   DEFAULT NULL,
+    code_start_seq    INT          DEFAULT NULL,
+    code_rule_enabled SMALLINT     NOT NULL DEFAULT 0,
     PRIMARY KEY (id),
-    UNIQUE (platform_id, cascade_org_id)
+    UNIQUE (org_code)
 );
 CREATE INDEX idx_cascade_org_parent ON tb_cascade_org (parent_org_id);
-CREATE INDEX idx_cascade_org_path ON tb_cascade_org (platform_id, org_path);
+CREATE INDEX idx_cascade_org_path ON tb_cascade_org (org_path);
+
+-- ----------------------------
+-- Table structure for tb_cascade_publish  (级联发布配置)
+-- 每个上级平台一套可见性视图；本地资产不绑定平台，推给哪个平台由本表表达
+-- object_type: ORG=tb_cascade_org.id / DEVICE=tb_device.id / CHANNEL=tb_device_channel.id
+-- ----------------------------
+DROP TABLE IF EXISTS tb_cascade_publish;
+CREATE TABLE tb_cascade_publish
+(
+    id            BIGSERIAL,
+    create_time   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    platform_id   VARCHAR(64)  NOT NULL,
+    object_type   VARCHAR(16)  NOT NULL,
+    object_id     BIGINT       NOT NULL,
+    publish_code  VARCHAR(64)  NOT NULL,
+    publish_name  VARCHAR(128) DEFAULT NULL,
+    enabled       SMALLINT     NOT NULL DEFAULT 1,
+    sort_order    INT          NOT NULL DEFAULT 0,
+    manufacturer  VARCHAR(64)  DEFAULT NULL,
+    model         VARCHAR(128) DEFAULT NULL,
+    address       VARCHAR(255) DEFAULT NULL,
+    ip_address    VARCHAR(64)  DEFAULT NULL,
+    ptz_type      INT          DEFAULT NULL,
+    civil_code    VARCHAR(64)  DEFAULT NULL,
+    revoke_policy VARCHAR(16)  DEFAULT NULL,
+    extend        TEXT,
+    PRIMARY KEY (id),
+    UNIQUE (platform_id, object_type, object_id),
+    UNIQUE (platform_id, publish_code)
+);
+CREATE INDEX idx_publish_type ON tb_cascade_publish (platform_id, object_type, enabled);
 
 
 -- ----------------------------

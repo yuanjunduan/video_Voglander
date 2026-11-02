@@ -24,10 +24,12 @@ CREATE TABLE tb_device
     register_time  DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
     keepalive_time DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
     server_ip      VARCHAR(255)                           NOT NULL,
+    org_id         INTEGER      DEFAULT NULL,
     extend         TEXT
 );
 
 CREATE UNIQUE INDEX uk_device ON tb_device (device_id);
+CREATE INDEX idx_device_org ON tb_device (org_id);
 
 -- ----------------------------
 -- Table structure for tb_device_channel
@@ -786,21 +788,58 @@ CREATE INDEX idx_cascade_channel_org ON tb_cascade_channel (platform_id, cascade
 DROP TABLE IF EXISTS tb_cascade_org;
 CREATE TABLE tb_cascade_org
 (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    create_time    DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    update_time    DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    platform_id    VARCHAR(64)                            NOT NULL,
-    parent_org_id  INTEGER      DEFAULT NULL,
-    org_path       VARCHAR(512) DEFAULT ''                NOT NULL,
-    cascade_org_id VARCHAR(64)                            NOT NULL,
-    org_name       VARCHAR(255)                           NOT NULL,
-    sort_order     INTEGER      DEFAULT 0                 NOT NULL,
-    enabled        INTEGER      DEFAULT 1                 NOT NULL,
-    revoke_policy  VARCHAR(16)  DEFAULT 'CASCADE'         NOT NULL
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    create_time       DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    update_time       DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    parent_org_id     INTEGER      DEFAULT NULL,
+    org_path          VARCHAR(512) DEFAULT ''                NOT NULL,
+    org_code          VARCHAR(64)                            NOT NULL,
+    org_name          VARCHAR(255)                           NOT NULL,
+    sort_order        INTEGER      DEFAULT 0                 NOT NULL,
+    enabled           INTEGER      DEFAULT 1                 NOT NULL,
+    revoke_policy     VARCHAR(16)  DEFAULT 'CASCADE'         NOT NULL,
+    code_province     VARCHAR(2)   DEFAULT NULL,
+    code_city         VARCHAR(2)   DEFAULT NULL,
+    code_county       VARCHAR(4)   DEFAULT NULL,
+    code_industry     VARCHAR(2)   DEFAULT NULL,
+    code_type         VARCHAR(3)   DEFAULT NULL,
+    code_network      VARCHAR(1)   DEFAULT NULL,
+    code_start_seq    INTEGER      DEFAULT NULL,
+    code_rule_enabled INTEGER      NOT NULL DEFAULT 0
 );
-CREATE UNIQUE INDEX uk_cascade_org_code ON tb_cascade_org (platform_id, cascade_org_id);
+CREATE UNIQUE INDEX uk_cascade_org_code ON tb_cascade_org (org_code);
 CREATE INDEX idx_cascade_org_parent ON tb_cascade_org (parent_org_id);
-CREATE INDEX idx_cascade_org_path ON tb_cascade_org (platform_id, org_path);
+CREATE INDEX idx_cascade_org_path ON tb_cascade_org (org_path);
+
+-- ----------------------------
+-- 级联发布表（每个上级平台一套可见性视图；本地资产不绑定平台，推给哪个平台由本表表达）
+-- object_type: ORG=tb_cascade_org.id / DEVICE=tb_device.id / CHANNEL=tb_device_channel.id
+-- ----------------------------
+DROP TABLE IF EXISTS tb_cascade_publish;
+CREATE TABLE tb_cascade_publish
+(
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    create_time   DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    update_time   DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    platform_id   VARCHAR(64)                            NOT NULL,
+    object_type   VARCHAR(16)                            NOT NULL,
+    object_id     INTEGER                                NOT NULL,
+    publish_code  VARCHAR(64)                            NOT NULL,
+    publish_name  VARCHAR(128) DEFAULT NULL,
+    enabled       INTEGER      DEFAULT 1                 NOT NULL,
+    sort_order    INTEGER      DEFAULT 0                 NOT NULL,
+    manufacturer  VARCHAR(64)  DEFAULT NULL,
+    model         VARCHAR(128) DEFAULT NULL,
+    address       VARCHAR(255) DEFAULT NULL,
+    ip_address    VARCHAR(64)  DEFAULT NULL,
+    ptz_type      INTEGER      DEFAULT NULL,
+    civil_code    VARCHAR(64)  DEFAULT NULL,
+    revoke_policy VARCHAR(16)  DEFAULT NULL,
+    extend        TEXT
+);
+CREATE UNIQUE INDEX uk_publish_object ON tb_cascade_publish (platform_id, object_type, object_id);
+CREATE UNIQUE INDEX uk_publish_code ON tb_cascade_publish (platform_id, publish_code);
+CREATE INDEX idx_publish_type ON tb_cascade_publish (platform_id, object_type, enabled);
 
 -- ----------------------------
 -- 级联上级订阅表（上级订本平台 → 本平台据此主动推送）
