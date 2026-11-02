@@ -712,7 +712,7 @@ CREATE TABLE tb_cascade_org
     id                BIGSERIAL,
     create_time       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    parent_org_id     BIGINT       DEFAULT NULL,
+    parent_id         BIGINT       DEFAULT NULL,
     org_path          VARCHAR(512) NOT NULL DEFAULT '',
     org_code          VARCHAR(64)  NOT NULL,
     org_name          VARCHAR(255) NOT NULL,
@@ -730,7 +730,7 @@ CREATE TABLE tb_cascade_org
     PRIMARY KEY (id),
     UNIQUE (org_code)
 );
-CREATE INDEX idx_cascade_org_parent ON tb_cascade_org (parent_org_id);
+CREATE INDEX idx_cascade_org_parent ON tb_cascade_org (parent_id);
 CREATE INDEX idx_cascade_org_path ON tb_cascade_org (org_path);
 
 -- ----------------------------
@@ -747,10 +747,10 @@ CREATE TABLE tb_cascade_publish
     platform_id   VARCHAR(64)  NOT NULL,
     object_type   VARCHAR(16)  NOT NULL,
     object_id     BIGINT       NOT NULL,
-    publish_code  VARCHAR(64)  NOT NULL,
+    publish_code  VARCHAR(64)  DEFAULT NULL,
     publish_name  VARCHAR(128) DEFAULT NULL,
     enabled       SMALLINT     NOT NULL DEFAULT 1,
-    sort_order    INT          NOT NULL DEFAULT 0,
+    sort_order    INT          DEFAULT NULL,
     manufacturer  VARCHAR(64)  DEFAULT NULL,
     model         VARCHAR(128) DEFAULT NULL,
     address       VARCHAR(255) DEFAULT NULL,

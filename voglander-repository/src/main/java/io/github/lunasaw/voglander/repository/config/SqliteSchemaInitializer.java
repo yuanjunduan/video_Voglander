@@ -81,10 +81,7 @@ public class SqliteSchemaInitializer {
     private SqliteBusinessTaskSchemaMigrator businessTaskSchemaMigrator;
 
     @Autowired(required = false)
-    private SqliteCascadeOrgSchemaMigrator cascadeOrgSchemaMigrator;
-
-    @Autowired(required = false)
-    private SqliteCascadePublishSchemaMigrator cascadePublishSchemaMigrator;
+    private SqliteCascadeSchemaMigrator cascadeSchemaMigrator;
 
     @Autowired(required = false)
     private SqliteCascadeChannelMetaSchemaMigrator cascadeChannelMetaSchemaMigrator;
@@ -118,8 +115,7 @@ public class SqliteSchemaInitializer {
                 verifyLegacySchemaComplete();
                 migrateBusinessTaskSchema();
                 migrateImageSchema();
-                migrateCascadeOrgSchema();
-                migrateCascadePublishSchema();
+                migrateCascadeSchema();
                 migrateCascadeChannelMetaSchema();
                 migrateSysConfigSchema();
                 verifySchemaComplete();
@@ -139,8 +135,7 @@ public class SqliteSchemaInitializer {
             // 空库全量脚本已含图像表；仍运行幂等 migration 以登记 history 并验证关键索引。
             migrateBusinessTaskSchema();
             migrateImageSchema();
-            migrateCascadeOrgSchema();
-            migrateCascadePublishSchema();
+            migrateCascadeSchema();
             migrateCascadeChannelMetaSchema();
             migrateSysConfigSchema();
             verifySchemaComplete();
@@ -196,30 +191,16 @@ public class SqliteSchemaInitializer {
     }
 
     /**
-     * 级联组织树与 {@code org_path} 的幂等补齐。
+     * 级联域 schema 的幂等对齐（组织去平台化 + 发布表 + 设备归属列）。
      *
-     * <p>这两项 1.0.11 的增量此前只提供手工脚本，老库升级后 {@code SELECT *} 会因缺列直接报错；
-     * 放到启动链路里才不会出现"能建组织、一查通道就 500"的半升级库。
+     * <p>整个 1.10.1 演进只走一个迁移器、一个事务：组织表重建与发布表建表必须同进同退，
+     * 拆开会让库停在「组织已改列、发布表没建出来」的半升级态。
+     * 又因为要跑在表数校验之前，否则老库会被 {@code verifySchemaComplete()} 以「表数不足」拒之门外。
      */
-    private void migrateCascadeOrgSchema() {
-        SqliteCascadeOrgSchemaMigrator migrator = cascadeOrgSchemaMigrator;
+    private void migrateCascadeSchema() {
+        SqliteCascadeSchemaMigrator migrator = cascadeSchemaMigrator;
         if (migrator == null) {
-            migrator = new SqliteCascadeOrgSchemaMigrator();
-            migrator.setDataSource(dataSource);
-        }
-        migrator.migrate();
-    }
-
-    /**
-     * 级联发布层 {@code tb_cascade_publish} 与设备归属列 {@code org_id} 的幂等补齐（1.10.1 新增）。
-     *
-     * <p>必须跑在表数校验之前：老库（sentinel 在、28 表）若不先补出发布表，
-     * {@code verifySchemaComplete()} 会以「表数不足」阻断启动。
-     */
-    private void migrateCascadePublishSchema() {
-        SqliteCascadePublishSchemaMigrator migrator = cascadePublishSchemaMigrator;
-        if (migrator == null) {
-            migrator = new SqliteCascadePublishSchemaMigrator();
+            migrator = new SqliteCascadeSchemaMigrator();
             migrator.setDataSource(dataSource);
         }
         migrator.migrate();

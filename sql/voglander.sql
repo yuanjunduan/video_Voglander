@@ -821,7 +821,7 @@ CREATE TABLE `tb_cascade_org`
     `id`             BIGINT UNSIGNED                                       NOT NULL AUTO_INCREMENT,
     `create_time`    DATETIME                                              NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `update_time`    DATETIME                                              NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
-    `parent_org_id`  BIGINT UNSIGNED                                                DEFAULT NULL COMMENT '父组织(tb_cascade_org.id)，空=根组织挂域节点',
+    `parent_id`      BIGINT UNSIGNED                                                DEFAULT NULL COMMENT '父组织(tb_cascade_org.id)，空=根组织挂域节点',
     `org_path`       VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '' COMMENT '物化路径：根到自身的 org_code 链，形如 /A/B/',
     `org_code`       VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '组织编码(20位，全局唯一)',
     `org_name`       VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '组织名称',
@@ -838,7 +838,7 @@ CREATE TABLE `tb_cascade_org`
     `code_rule_enabled` TINYINT                                            NOT NULL DEFAULT 0 COMMENT '0=未启用(后端默认生成) 1=按七段规则生成',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_cascade_org_code` (`org_code`) USING BTREE,
-    KEY `idx_cascade_org_parent` (`parent_org_id`) USING BTREE,
+    KEY `idx_cascade_org_parent` (`parent_id`) USING BTREE,
     KEY `idx_cascade_org_path` (`org_path`) USING BTREE
 ) ENGINE = InnoDB
   AUTO_INCREMENT = 1
@@ -859,10 +859,10 @@ CREATE TABLE `tb_cascade_publish`
     `platform_id`   VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '上级平台ID',
     `object_type`   VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT 'ORG/DEVICE/CHANNEL',
     `object_id`     BIGINT UNSIGNED                                       NOT NULL COMMENT '本地对象ID',
-    `publish_code`  VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '上报编码(该平台)',
+    `publish_code`  VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '上报编码(该平台)，空=沿用本地编码',
     `publish_name`  VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '上报名称，空=用本地名称',
     `enabled`       TINYINT                                               NOT NULL DEFAULT 1 COMMENT '1上报 0不报',
-    `sort_order`    INT                                                   NOT NULL DEFAULT 0 COMMENT '同级排序',
+    `sort_order`    INT                                                            DEFAULT NULL COMMENT '同级排序，空=用本地排序',
     `manufacturer`  VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '目录元数据覆盖-厂商',
     `model`         VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '目录元数据覆盖-型号',
     `address`       VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '目录元数据覆盖-地址',

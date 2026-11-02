@@ -791,7 +791,7 @@ CREATE TABLE tb_cascade_org
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     create_time       DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
     update_time       DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    parent_org_id     INTEGER      DEFAULT NULL,
+    parent_id         INTEGER      DEFAULT NULL,
     org_path          VARCHAR(512) DEFAULT ''                NOT NULL,
     org_code          VARCHAR(64)                            NOT NULL,
     org_name          VARCHAR(255)                           NOT NULL,
@@ -808,7 +808,7 @@ CREATE TABLE tb_cascade_org
     code_rule_enabled INTEGER      NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX uk_cascade_org_code ON tb_cascade_org (org_code);
-CREATE INDEX idx_cascade_org_parent ON tb_cascade_org (parent_org_id);
+CREATE INDEX idx_cascade_org_parent ON tb_cascade_org (parent_id);
 CREATE INDEX idx_cascade_org_path ON tb_cascade_org (org_path);
 
 -- ----------------------------
@@ -824,10 +824,10 @@ CREATE TABLE tb_cascade_publish
     platform_id   VARCHAR(64)                            NOT NULL,
     object_type   VARCHAR(16)                            NOT NULL,
     object_id     INTEGER                                NOT NULL,
-    publish_code  VARCHAR(64)                            NOT NULL,
+    publish_code  VARCHAR(64)  DEFAULT NULL,
     publish_name  VARCHAR(128) DEFAULT NULL,
     enabled       INTEGER      DEFAULT 1                 NOT NULL,
-    sort_order    INTEGER      DEFAULT 0                 NOT NULL,
+    sort_order    INTEGER      DEFAULT NULL,
     manufacturer  VARCHAR(64)  DEFAULT NULL,
     model         VARCHAR(128) DEFAULT NULL,
     address       VARCHAR(255) DEFAULT NULL,

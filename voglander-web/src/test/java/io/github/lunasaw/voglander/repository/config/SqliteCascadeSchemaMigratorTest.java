@@ -2,6 +2,7 @@ package io.github.lunasaw.voglander.repository.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -21,23 +22,26 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 /**
- * 1.10.1 级联去平台化 + 发布层迁移的回归测试。
+ * 1.10.1 级联域 schema 迁移的回归测试。
  *
  * <p>重点钉住 SQLite 那条最容易坏的路：组织表不能 {@code DROP COLUMN} 也不能改列名，
  * 只能建中间表搬数据。搬迁要同时满足「旧列消失、新列有值、唯一键变单列、编码列补齐、
  * 索引指向新列、重复执行不重复搬」六件事，任一件漏了都会在启动时静默留下半升级库。
+ *
+ * <p>另外钉住发布表的「空即继承」：{@code publish_code} 允许 NULL 且多行并存，
+ * 但一旦填了值，同平台的跨对象类型重码必须被库拦住。
  */
-@DisplayName("SQLite 1.10.1 级联去平台化与发布层增量迁移")
-class SqliteCascadePublishSchemaMigratorTest {
+@DisplayName("SQLite 1.10.1 级联域增量迁移")
+class SqliteCascadeSchemaMigratorTest {
 
     private static final String LEGACY_ORG_CODE = "34020000002160000001";
 
-    private Path         dbFile;
-    private DataSource   dataSource;
+    private Path       dbFile;
+    private DataSource dataSource;
 
     @BeforeEach
     void setUp() throws IOException {
-        dbFile = Files.createTempFile("voglander-cascade-publish-migration-", ".db");
+        dbFile = Files.createTempFile("voglander-cascade-migration-", ".db");
         Files.deleteIfExists(dbFile);
         DriverManagerDataSource source = new DriverManagerDataSource();
         source.setDriverClassName("org.sqlite.JDBC");
@@ -53,14 +57,16 @@ class SqliteCascadePublishSchemaMigratorTest {
     }
 
     @Test
-    @DisplayName("老库组织表重建：platform_id/cascade_org_id 消失，编码与数据都保留")
-    void legacyOrgTable_shouldBeRebuiltAroundOrgCode() throws Exception {
+    @DisplayName("1.10.0 老库重建：platform_id/cascade_org_id/parent_org_id 全部退场，数据保留")
+    void legacyOrgTable_shouldBeRebuilt() throws Exception {
         prepareLegacyOrgSchema();
 
-        orgMigrator().migrate();
+        migrator().migrate();
 
         assertFalse(columnExists("tb_cascade_org", "platform_id"), "去平台化后不应再有 platform_id");
         assertFalse(columnExists("tb_cascade_org", "cascade_org_id"), "旧列名应被 org_code 取代");
+        assertFalse(columnExists("tb_cascade_org", "parent_org_id"), "旧父列名应被 parent_id 取代");
+        assertTrue(columnExists("tb_cascade_org", "parent_id"));
         for (String column : new String[] {"code_province", "code_city", "code_county", "code_industry",
             "code_type", "code_network", "code_start_seq", "code_rule_enabled"}) {
             assertTrue(columnExists("tb_cascade_org", column), "缺少编码段列 " + column);
@@ -69,7 +75,35 @@ class SqliteCascadePublishSchemaMigratorTest {
         assertEquals("根组织", text("SELECT org_name FROM tb_cascade_org WHERE id=1"));
         assertEquals("/" + LEGACY_ORG_CODE + "/", text("SELECT org_path FROM tb_cascade_org WHERE id=1"));
         assertEquals(0, scalar("SELECT code_rule_enabled FROM tb_cascade_org WHERE id=1"));
+        assertEquals(1, scalar("SELECT count(*) FROM tb_cascade_org WHERE parent_id=1"));
         assertEquals(1, countMigrationHistory());
+    }
+
+    @Test
+    @DisplayName("中间态库（已去平台化但仍用 parent_org_id）也能补齐到 parent_id")
+    void halfMigratedOrgTable_shouldReachTargetShape() throws Exception {
+        execute("CREATE TABLE tb_cascade_org ("
+            + " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            + " create_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,"
+            + " update_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,"
+            + " parent_org_id INTEGER DEFAULT NULL,"
+            + " org_path VARCHAR(512) DEFAULT '' NOT NULL,"
+            + " org_code VARCHAR(64) NOT NULL,"
+            + " org_name VARCHAR(255) NOT NULL,"
+            + " sort_order INTEGER DEFAULT 0 NOT NULL,"
+            + " enabled INTEGER DEFAULT 1 NOT NULL,"
+            + " revoke_policy VARCHAR(16) DEFAULT 'CASCADE' NOT NULL,"
+            + " code_rule_enabled INTEGER NOT NULL DEFAULT 0)");
+        execute("CREATE TABLE tb_cascade_channel (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            + " platform_id VARCHAR(64) NOT NULL, cascade_org_id VARCHAR(64) DEFAULT NULL)");
+        execute("CREATE TABLE tb_device (id INTEGER PRIMARY KEY AUTOINCREMENT, device_id VARCHAR(64) NOT NULL)");
+        execute("INSERT INTO tb_cascade_org(org_code, org_name) VALUES('" + LEGACY_ORG_CODE + "', '根组织')");
+
+        migrator().migrate();
+
+        assertTrue(columnExists("tb_cascade_org", "parent_id"));
+        assertFalse(columnExists("tb_cascade_org", "parent_org_id"));
+        assertEquals(LEGACY_ORG_CODE, text("SELECT org_code FROM tb_cascade_org WHERE id=1"));
     }
 
     @Test
@@ -77,13 +111,14 @@ class SqliteCascadePublishSchemaMigratorTest {
     void rebuiltOrgTable_shouldCarrySingleColumnIndexes() throws Exception {
         prepareLegacyOrgSchema();
 
-        orgMigrator().migrate();
+        migrator().migrate();
 
         assertTrue(indexExists("uk_cascade_org_code"));
         assertTrue(indexExists("idx_cascade_org_parent"));
         assertTrue(indexExists("idx_cascade_org_path"));
-        assertTrue(indexColumns("uk_cascade_org_code").contains("org_code"));
-        assertFalse(indexColumns("uk_cascade_org_path").contains("platform_id"),
+        assertEquals("org_code", indexColumns("uk_cascade_org_code"));
+        assertEquals("parent_id", indexColumns("idx_cascade_org_parent"));
+        assertFalse(indexColumns("idx_cascade_org_path").contains("platform_id"),
             "idx_cascade_org_path 仍带 platform_id → 旧索引没被替换");
     }
 
@@ -91,7 +126,7 @@ class SqliteCascadePublishSchemaMigratorTest {
     @DisplayName("重复启动不重复搬表，migration 只登记一次")
     void repeatedStartup_shouldBeIdempotent() throws Exception {
         prepareLegacyOrgSchema();
-        SqliteCascadeOrgSchemaMigrator migrator = orgMigrator();
+        SqliteCascadeSchemaMigrator migrator = migrator();
 
         migrator.migrate();
         migrator.migrate();
@@ -104,12 +139,10 @@ class SqliteCascadePublishSchemaMigratorTest {
     @DisplayName("跨平台同编码搬迁后不撞单列唯一键，第二个拼平台后缀保命")
     void duplicateLegacyCodeAcrossPlatforms_shouldSurviveRebuild() throws Exception {
         prepareLegacyOrgSchema();
-        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
-            statement.executeUpdate("INSERT INTO tb_cascade_org(platform_id, cascade_org_id, org_name) "
-                + "VALUES('P2', '" + LEGACY_ORG_CODE + "', '另一平台的同码组织')");
-        }
+        execute("INSERT INTO tb_cascade_org(platform_id, cascade_org_id, org_name) "
+            + "VALUES('P2', '" + LEGACY_ORG_CODE + "', '另一平台的同码组织')");
 
-        orgMigrator().migrate();
+        migrator().migrate();
 
         assertEquals(3, scalar("SELECT count(*) FROM tb_cascade_org"), "三行旧组织应全部搬过去，一个都不能丢");
         assertEquals(LEGACY_ORG_CODE, text("SELECT org_code FROM tb_cascade_org WHERE id=1"));
@@ -118,51 +151,54 @@ class SqliteCascadePublishSchemaMigratorTest {
     }
 
     @Test
-    @DisplayName("发布表与设备归属列补齐，跨对象类型的重码被平台内唯一键拦住")
-    void publishSchema_shouldBeCreatedWithCrossTypeCodeGuard() throws Exception {
+    @DisplayName("发布表建成：编码为空表示继承本地，多行 NULL 并存，填了值才受重码约束")
+    void publishTable_shouldKeepNullAsInheritAndGuardFilledCodes() throws Exception {
         prepareLegacyOrgSchema();
 
-        orgMigrator().migrate();
-        publishMigrator().migrate();
+        migrator().migrate();
 
         assertTrue(tableExists("tb_cascade_publish"));
         assertTrue(indexExists("uk_publish_object"));
         assertTrue(indexExists("uk_publish_code"));
         assertTrue(indexExists("idx_publish_type"));
-        assertTrue(indexExists("idx_device_org"));
         assertTrue(columnExists("tb_device", "org_id"));
-        assertEquals(2, countMigrationHistory());
+        assertTrue(indexExists("idx_device_org"));
 
-        execute("INSERT INTO tb_cascade_publish(platform_id, object_type, object_id, publish_code) "
-            + "VALUES('P1', 'ORG', 1, '34020000002160000001')");
-        assertThrows(Exception.class, () -> execute(
-            "INSERT INTO tb_cascade_publish(platform_id, object_type, object_id, publish_code) "
-                + "VALUES('P1', 'CHANNEL', 9, '34020000002160000001')"),
-            "同一平台内组织码与通道码相撞必须被 uk_publish_code 拒绝");
-        execute("INSERT INTO tb_cascade_publish(platform_id, object_type, object_id, publish_code) "
-            + "VALUES('P2', 'CHANNEL', 9, '34020000001310000001')");
+        /* 三行都不覆盖编码：全部回落本地码，唯一键不得拦 */
+        execute("INSERT INTO tb_cascade_publish(platform_id, object_type, object_id) VALUES('P1', 'ORG', 1)");
+        execute("INSERT INTO tb_cascade_publish(platform_id, object_type, object_id) VALUES('P1', 'DEVICE', 2)");
+        execute("INSERT INTO tb_cascade_publish(platform_id, object_type, object_id) VALUES('P1', 'CHANNEL', 3)");
+        assertEquals(3, scalar("SELECT count(*) FROM tb_cascade_publish"));
+        assertNull(text("SELECT publish_code FROM tb_cascade_publish WHERE object_type='ORG'"));
+
+        /* 填了覆盖值就要受平台内跨类型防重码约束 */
+        execute("UPDATE tb_cascade_publish SET publish_code='34020000002160000001' WHERE object_type='ORG'");
+        IllegalStateException error = assertThrows(IllegalStateException.class, () -> execute(
+            "UPDATE tb_cascade_publish SET publish_code='34020000002160000001' WHERE object_type='CHANNEL'"));
+        assertTrue(error.getCause() != null || error.getMessage() != null);
+        execute("UPDATE tb_cascade_publish SET publish_code='34020000001310000001' WHERE object_type='CHANNEL'");
     }
 
     @Test
-    @DisplayName("已按新形状建好的库，两个迁移器都不改动结构与数据")
+    @DisplayName("已按目标形状建好的库，迁移器不改动结构与数据")
     void freshShapeDatabase_shouldBeUntouched() throws Exception {
         execute("CREATE TABLE tb_cascade_channel (id INTEGER PRIMARY KEY AUTOINCREMENT,"
             + " platform_id VARCHAR(64) NOT NULL, cascade_org_id VARCHAR(64) DEFAULT NULL)");
-        execute("CREATE TABLE tb_device (id INTEGER PRIMARY KEY AUTOINCREMENT,"
-            + " device_id VARCHAR(64) NOT NULL)");
+        execute("CREATE TABLE tb_device (id INTEGER PRIMARY KEY AUTOINCREMENT, device_id VARCHAR(64) NOT NULL)");
 
-        orgMigrator().migrate();
-        publishMigrator().migrate();
-        prepareDeviceRow();
-        orgMigrator().migrate();
+        migrator().migrate();
+        execute("INSERT INTO tb_device(device_id) VALUES('device-1')");
+        migrator().migrate();
 
-        assertEquals(0, scalar("SELECT count(*) FROM tb_cascade_org"));
+        assertTrue(columnExists("tb_cascade_org", "parent_id"));
         assertTrue(columnExists("tb_device", "org_id"));
+        assertEquals(0, scalar("SELECT count(*) FROM tb_cascade_org"));
         assertEquals(1, scalar("SELECT count(*) FROM tb_device"));
     }
 
     // ------------------------------------------------------------------ 夹具
 
+    /** 1.10.0 形状：platform_id + parent_org_id + cascade_org_id，无编码段列 */
     private void prepareLegacyOrgSchema() throws Exception {
         execute("CREATE TABLE tb_cascade_org ("
             + " id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -181,35 +217,27 @@ class SqliteCascadePublishSchemaMigratorTest {
         execute("CREATE INDEX idx_cascade_org_path ON tb_cascade_org (platform_id, org_path)");
         execute("CREATE TABLE tb_cascade_channel (id INTEGER PRIMARY KEY AUTOINCREMENT,"
             + " platform_id VARCHAR(64) NOT NULL, cascade_org_id VARCHAR(64) DEFAULT NULL)");
-        execute("CREATE TABLE tb_device (id INTEGER PRIMARY KEY AUTOINCREMENT,"
-            + " device_id VARCHAR(64) NOT NULL)");
+        execute("CREATE TABLE tb_device (id INTEGER PRIMARY KEY AUTOINCREMENT, device_id VARCHAR(64) NOT NULL)");
         execute("INSERT INTO tb_cascade_org(platform_id, cascade_org_id, org_name) "
             + "VALUES('P1', '" + LEGACY_ORG_CODE + "', '根组织')");
         execute("INSERT INTO tb_cascade_org(platform_id, parent_org_id, cascade_org_id, org_name) "
             + "VALUES('P1', 1, '" + LEGACY_ORG_CODE + "001', '子组织')");
     }
 
-    private void prepareDeviceRow() throws Exception {
-        execute("INSERT INTO tb_device(device_id) VALUES('device-1')");
-    }
-
-    private SqliteCascadeOrgSchemaMigrator orgMigrator() {
-        SqliteCascadeOrgSchemaMigrator migrator = new SqliteCascadeOrgSchemaMigrator();
-        migrator.setDataSource(dataSource);
-        return migrator;
-    }
-
-    private SqliteCascadePublishSchemaMigrator publishMigrator() {
-        SqliteCascadePublishSchemaMigrator migrator = new SqliteCascadePublishSchemaMigrator();
+    private SqliteCascadeSchemaMigrator migrator() {
+        SqliteCascadeSchemaMigrator migrator = new SqliteCascadeSchemaMigrator();
         migrator.setDataSource(dataSource);
         return migrator;
     }
 
     // ------------------------------------------------------------------ 查询工具
 
-    private void execute(String sql) throws Exception {
+    /** 执行 DDL/DML；JDBC 异常统一包成 IllegalStateException，便于断言唯一键冲突 */
+    private void execute(String sql) {
         try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
             statement.execute(sql);
+        } catch (Exception e) {
+            throw new IllegalStateException("执行失败: " + sql, e);
         }
     }
 
@@ -241,7 +269,7 @@ class SqliteCascadePublishSchemaMigratorTest {
         return scalar("SELECT count(*) FROM pragma_table_info('" + table + "') WHERE name='" + column + "'") > 0;
     }
 
-    /** 索引列名串（形如 org_code，多列以逗号分隔），用于判断索引指向的列是否已被替换 */
+    /** 索引列名串（多列以逗号分隔），用于判断索引指向的列是否已被替换 */
     private String indexColumns(String index) throws Exception {
         StringBuilder columns = new StringBuilder();
         try (Connection connection = dataSource.getConnection();

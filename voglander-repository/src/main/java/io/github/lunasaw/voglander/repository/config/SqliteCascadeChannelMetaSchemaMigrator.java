@@ -24,7 +24,7 @@ import lombok.extern.slf4j.Slf4j;
  * 表现为上级目录一切照旧、页面一提交就 500。本类在启动时把老库补齐到
  * {@code sql/voglander-sqlite.sql} 的形状。
  *
- * <p>幂等策略与 {@link SqliteCascadeOrgSchemaMigrator} 一致：
+ * <p>幂等策略与 {@link SqliteCascadeSchemaMigrator} 一致：
  * <ul>
  *   <li>加列前查 {@code pragma_table_info}（SQLite 的 {@code ADD COLUMN} 不支持
  *       {@code IF NOT EXISTS}，重复执行会报 duplicate column）</li>
