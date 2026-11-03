@@ -221,6 +221,7 @@ npx vitest run apps/web-antd/src/views/cascade
 | 12 | 前端改完类型检查找不到错 | `vue-tsc` 输出为空才代表通过，别只看最后一行 |
 | 13 | 级联报文修改后「没生效」 | 后端还跑着旧 class，必须重启 |
 | 14 | 定时任务类新增后启动即报错/不触发 | 需补 `@TechnicalScheduler` 一类注解与架构测试期望表 |
+| 15 | 改完数据列表依旧值（推送配置后「已推送平台」还是「未推送」） | 组织树在内存里只存一份，`proxyConfig.ajax.query` 读的就是它；抽屉提交成功回调必须先 `invalidateCascadeOrgTree()` 再 `query()`，toolbar 刷新按钮靠 query 收到 `PointerEvent` 才强制重取 |
 
 ---
 
