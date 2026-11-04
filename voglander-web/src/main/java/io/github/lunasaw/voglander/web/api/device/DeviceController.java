@@ -32,6 +32,8 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 
 import io.github.lunasaw.voglander.common.domain.AjaxResult;
+import io.github.lunasaw.voglander.common.exception.ServiceException;
+import io.github.lunasaw.voglander.common.exception.ServiceExceptionEnum;
 import io.github.lunasaw.voglander.manager.service.DeviceService;
 import io.github.lunasaw.voglander.repository.entity.DeviceDO;
 
@@ -254,6 +256,9 @@ public class DeviceController {
     @Operation(summary = "创建设备", description = "添加新的设备")
     @ApiResponse(responseCode = "200", description = "创建成功")
     public AjaxResult insert(@RequestBody DeviceCreateReq createReq) {
+        // 手填新增必须归属一个组织：推送时按该组织挂目录节点，没有组织就无处可挂。
+        validateOrgId(createReq.getOrgId(), true);
+
         // Req -> DTO (使用 Web 层转换器)
         DeviceDTO deviceDTO = deviceWebAssembler.toDeviceDTO(createReq);
 
@@ -266,6 +271,11 @@ public class DeviceController {
     @PostMapping("/insertBatch")
     @Operation(summary = "批量创建设备", description = "批量添加设备")
     public AjaxResult insertBatch(@RequestBody List<DeviceCreateReq> createReqList) {
+        // 批量同样属于「手填新增」，逐条校验组织，与单条入口保持一致
+        for (DeviceCreateReq createReq : createReqList) {
+            validateOrgId(createReq.getOrgId(), true);
+        }
+
         // 批量 Req -> DTO (使用 Web 层转换器)
         List<DeviceDTO> deviceDTOList = deviceWebAssembler.toDeviceDTOList(createReqList);
 
@@ -278,6 +288,9 @@ public class DeviceController {
     @PutMapping("/update")
     @Operation(summary = "更新设备", description = "更新设备信息")
     public AjaxResult update(@RequestBody DeviceUpdateReq updateReq) {
+        // 组织三态：null=不改（SIP 自动注册的设备保持「未归组织」）/ 0=清空 / 其余必须命中组织行
+        validateOrgId(updateReq.getOrgId(), false);
+
         // Req -> DTO (使用 Web 层转换器)
         DeviceDTO deviceDTO = deviceWebAssembler.toDeviceDTO(updateReq);
 
@@ -289,6 +302,11 @@ public class DeviceController {
     @PutMapping("/updateBatch")
     @Operation(summary = "批量更新设备", description = "批量更新设备信息")
     public AjaxResult updateBatch(@RequestBody List<DeviceUpdateReq> updateReqList) {
+        // 逐条校验（未传 orgId 的条目跳过，语义与单条一致）
+        for (DeviceUpdateReq updateReq : updateReqList) {
+            validateOrgId(updateReq.getOrgId(), false);
+        }
+
         // 批量 Req -> DTO (使用 Web 层转换器)
         List<DeviceDTO> deviceDTOList = deviceWebAssembler.toUpdateDeviceDTOList(updateReqList);
 
@@ -310,6 +328,32 @@ public class DeviceController {
         description = "按 ID 列表批量级联删除（同一事务），返回实际删除的设备数")
     public AjaxResult deleteBatch(@RequestBody List<Long> ids) {
         return AjaxResult.success(deviceRemovalManager.removeByIds(ids));
+    }
+
+    /**
+     * 校验设备所属组织。
+     *
+     * <p>
+     * 必须留在 Web 入口，<b>不能下沉到 {@code DeviceManager#add}</b>：SIP REGISTER 自动注册的设备走
+     * {@code Gb28181ProtocolHandler#handleRegister → DeviceRegisterServiceImpl#login → DeviceManager#saveOrUpdate → add}，
+     * 全程没有表单、拿不到组织；一旦在 Manager 层强校验，所有 GB28181 设备都会注册失败。
+     * 因此约定：<b>手填入口必填，自动注册允许为空</b>，空值在列表上显示为「未归组织」。
+     * </p>
+     *
+     * @param orgId    目标组织主键；{@code 0} 为「清空归属」哨兵值，不当组织使用
+     * @param required true=必须传（手填新增）；false=传了才校验（更新）
+     */
+    private void validateOrgId(Long orgId, boolean required) {
+        if (orgId == null || orgId == 0L) {
+            if (required) {
+                throw new ServiceException(ServiceExceptionEnum.PARAM_ERROR.getCode(), "新增设备必须选择所属组织");
+            }
+            return;
+        }
+        if (cascadeOrgManager.getById(orgId) == null) {
+            throw new ServiceException(ServiceExceptionEnum.PARAM_ERROR.getCode(),
+                "所属组织不存在（orgId=" + orgId + "），请刷新组织树后重试");
+        }
     }
 
     @GetMapping("/count")
