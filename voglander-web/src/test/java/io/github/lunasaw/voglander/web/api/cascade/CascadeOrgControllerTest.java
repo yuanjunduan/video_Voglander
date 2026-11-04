@@ -14,6 +14,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -30,7 +31,10 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
 import io.github.lunasaw.voglander.manager.code.CascadeCodeReapplyResult;
 import io.github.lunasaw.voglander.manager.code.CascadeCodeRuleService;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeBlockedOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgCatalog;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeRevokePreviewDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
 import io.github.lunasaw.voglander.web.api.cascade.assembler.CascadeWebAssembler;
@@ -250,5 +254,45 @@ class CascadeOrgControllerTest {
             .andExpect(jsonPath("$.data.codeCity").value(nullValue()))
             .andExpect(jsonPath("$.data.codeCounty").value(nullValue()))
             .andExpect(jsonPath("$.data.codeType").value("216"));
+    }
+
+    @Test
+    @DisplayName("平台组织视角：目录与阻断同源下发，三个统计值一次算好")
+    void listPublished_should_merge_catalog_and_blocked() throws Exception {
+        CascadePlatformOrgDTO delivered = new CascadePlatformOrgDTO();
+        delivered.setId(1L);
+        delivered.setLocalCode("34020000002150000001");
+        delivered.setPlatformCode("37000200002000000001");
+        delivered.setName("一层");
+        delivered.setSortOrder(0);
+        CascadePlatformOrgDTO child = new CascadePlatformOrgDTO();
+        child.setId(2L);
+        child.setLocalCode("34020000002150000002");
+        child.setPlatformCode("34020000002150000002");
+        child.setName("二层");
+        child.setSortOrder(1);
+        CascadeBlockedOrgDTO blocked = new CascadeBlockedOrgDTO();
+        blocked.setId(3L);
+        blocked.setLocalCode("34020000002150000003");
+        blocked.setName("三层");
+        blocked.setBlockedByCode("34020000002150000002");
+        blocked.setBlockedByName("二层");
+        blocked.setReason(CascadeBlockedOrgDTO.REASON_ANCESTOR_NOT_PUBLISHED);
+        blocked.setRerouted(true);
+
+        when(cascadeOrgManager.platformOrgCatalog("PF1")).thenReturn(new CascadePlatformOrgCatalog(
+            List.of(delivered, child), Set.of("34020000002150000002"), List.of(blocked)));
+
+        mvc.perform(get("/api/v1/cascade/org/published").param("platformId", "PF1"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.platformId").value("PF1"))
+            .andExpect(jsonPath("$.data.deliveredCount").value(2))
+            .andExpect(jsonPath("$.data.blockedCount").value(1))
+            /* 上浮集合覆盖全量被阻断组织，与阻断清单不是同一集合，计数直接取集合大小 */
+            .andExpect(jsonPath("$.data.reroutedCount").value(1))
+            .andExpect(jsonPath("$.data.items[0].platformCode").value("37000200002000000001"))
+            .andExpect(jsonPath("$.data.blocked[0].blockedByCode").value("34020000002150000002"))
+            .andExpect(jsonPath("$.data.blocked[0].reason").value("ANCESTOR_NOT_PUBLISHED"))
+            .andExpect(jsonPath("$.data.blocked[0].rerouted").value(true));
     }
 }

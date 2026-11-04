@@ -4,9 +4,12 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Component;
 
 import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeBlockedOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgCatalog;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePublishDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeRevokePreviewDTO;
 import io.github.lunasaw.voglander.manager.manager.CatalogVisibility;
@@ -21,6 +24,7 @@ import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformCreateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformPageReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformUpdateReq;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeOrgVO;
+import io.github.lunasaw.voglander.web.api.cascade.vo.CascadePlatformOrgCatalogVO;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadePublishVO;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeRevokePreviewVO;
 
@@ -394,6 +398,51 @@ public class CascadeWebAssembler {
             list.add(toVO(dto));
         }
         return list;
+    }
+
+    /**
+     * 平台组织视角 DTO → VO。
+     *
+     * <p>数量在这里一次算好：前端三个统计值与列表同源，避免各自过滤后出现
+     * 「目录里 3 条、计数显示 5」这类对不上的情况。
+     *
+     * @param catalog    平台组织视角；入参为空返回 null
+     * @param platformId 请求里的平台编码，原样回显给前端对齐并发结果
+     */
+    public CascadePlatformOrgCatalogVO toVO(CascadePlatformOrgCatalog catalog, String platformId) {
+        if (catalog == null) {
+            return null;
+        }
+        CascadePlatformOrgCatalogVO vo = new CascadePlatformOrgCatalogVO();
+        vo.setPlatformId(platformId);
+        for (CascadePlatformOrgDTO org : catalog.catalogOrgs()) {
+            CascadePlatformOrgCatalogVO.ItemVO item = new CascadePlatformOrgCatalogVO.ItemVO();
+            item.setId(org.getId());
+            item.setParentId(org.getParentId());
+            item.setLocalCode(org.getLocalCode());
+            item.setPlatformCode(org.getPlatformCode());
+            item.setName(org.getName());
+            item.setSortOrder(org.getSortOrder());
+            item.setParentPlatformCode(org.getParentPlatformCode());
+            vo.getItems().add(item);
+        }
+        for (CascadeBlockedOrgDTO org : catalog.blockedOrgs()) {
+            CascadePlatformOrgCatalogVO.BlockedVO blocked = new CascadePlatformOrgCatalogVO.BlockedVO();
+            blocked.setId(org.getId());
+            blocked.setLocalCode(org.getLocalCode());
+            blocked.setName(org.getName());
+            blocked.setBlockedByCode(org.getBlockedByCode());
+            blocked.setBlockedByName(org.getBlockedByName());
+            blocked.setReason(org.getReason());
+            blocked.setRerouted(org.getRerouted());
+            vo.getBlocked().add(blocked);
+        }
+        vo.setDeliveredCount(vo.getItems().size());
+        vo.setBlockedCount(vo.getBlocked().size());
+        /* 上浮集合覆盖全量被阻断的组织（含没勾发布的），与阻断清单不是同一集合，
+           直接取集合大小才是「通道改挂域节点的组织数」 */
+        vo.setReroutedCount(catalog.reroutedLocalCodes().size());
+        return vo;
     }
 
     private List<CascadeRevokePreviewVO.NodeVO> toNodeVOList(List<LocalCascadeCatalogChangeEvent.Node> nodes) {

@@ -491,7 +491,7 @@ flowchart LR
 |---|---|---|---|
 | PUT | `/api/v1/cascade/org/{id}/publish` | **改** | body 增 `includeAncestors`；取消勾选的平台改走真撤销 |
 | POST | `/api/v1/cascade/org/{id}/revoke` | **新增** | `?platformId=`，两段式撤销，失败严格阻断 |
-| GET | `/api/v1/cascade/org/published` | **新增** | `?platformId=`，返回该平台真正可见的组织树（`platformOrgView`） |
+| GET | `/api/v1/cascade/org/published` | **新增** | ✅ 已落地。`?platformId=`，一次算两份清单：`items`（上级这一刻真实在目录里的组织，含平台编码/父编码覆盖）+ `blocked`（**你勾了推送、上级却看不到**的组织，带阻断节点与原因 `LOCAL_DISABLED` / `ANCESTOR_LOCAL_DISABLED` / `ANCESTOR_NOT_PUBLISHED`）；另回 `deliveredCount` / `blockedCount` / `reroutedCount`。平台页「已推送组织」与组织页「切到平台视角」共用本接口 |
 | GET | `/api/v1/cascade/org/{id}/publish` | 改 | 出参增 `effectiveCode`、`codeSource`、`lastPush*` |
 | POST | `/api/v1/cascade/org/{id}/code/reapply` | 保留 | 仅作用于本地 `org_code`，不动 `publish_code` |
 | PUT | `/api/v1/cascade/platform/{id}/code-rule` | **新增** | 平台级编码规则（五段 + 起始序号 + 两开关，**整份覆盖**）；启用时前 14 位必填，类型位只读；`publish_ancestors` 不提交时保留库中现值；段位首尾空白在 Req 入口归一（空格=未填），VO 五段空串统一回 null。✅ 已落地（`CascadePlatformManager#updateCodeRule` + `assertCodeRuleValid`） |
@@ -587,6 +587,31 @@ flowchart LR
 - 每平台一行：`勾选` `生效码(只读回显)` `手工编码(可填)` `名称` `通道策略` `最近推送状态`。
 - 底部加父链策略：`[✓] 父组织未推送时一并推送`（默认取平台配置）。
 - 保存时若存在"父链缺失且未勾选"，前端直接拦截并列出缺失节点，不等后端 400。
+
+### 10.4 平台视角（只读）：两个入口，一份数据
+
+问「这个上级到底收到了哪些组织」有两个自然的起点，两边都给了入口，但**共用 `GET /org/published`**，不各拼一套过滤——否则两个页面必然出现「这边有、那边没有」。
+
+| 入口 | 位置 | 形态 |
+|---|---|---|
+| 「已推送组织」 | 平台管理 → 操作列 | 抽屉（默认半屏、左边缘可拖拽） |
+| 「切到平台视角」 | 级联组织树 → 表格上方常驻选择器 | 就地换成该平台的只读树（本地表格 `v-show` 隐藏不销毁） |
+
+一屏内给两份清单：
+
+- **目录内组织**：按 `platformCode` 拼树，**不是**按本地 `parentId`——同一个组织在不同平台可能是不同编码，上级只认它自己那套；逐行显示上级看到的名字/编码/父编码/排序。
+- **已勾选但上级看不到**：带阻断节点与原因。「自己停用」与「祖先未发布」的修复入口完全不同，合成一句「未推送」用户只能猜。阻断节点策略为 `REROUTE` 时额外标出「通道改挂域节点」——该组织的业务其实还在，不能按「彻底掉线」处理。
+
+界面约束（都已踩过一次）：
+
+- 平台视角一律只读：目录里的编码/名称都是发布覆盖值，就地编辑分不清改的是本地组织还是覆盖。
+- 本地组织表格用 `v-show` 隐藏而非 `v-if` 销毁，否则列宽、展开状态与已选行全丢；切回本地视角不必重新请求。
+- 视角选择器必须放在表格**之外**：表格工具栏随表格一起隐藏，放里面就再也切不回来了。
+
+通用形态约束（全站抽屉与表单）：
+
+- 业务抽屉统一「默认半屏 + 左边缘可拖拽」（`useDrawerResize`，宽度按面板 class 记忆）；宽表类详情可传首次宽度（如设备详情 `1320px`）。
+- 表单是两列栅格：整行字段的 `formItemClass` 必须写成 `col-span-2 md:col-span-2`。vben 是把它与 commonConfig 的 `md:col-span-1` **字符串拼接**（不经过 tailwind-merge），只写 `col-span-2` 在 ≥768px 时会被后者覆盖，表现就是「整行字段只占半栏、多选被裁」。
 
 ---
 

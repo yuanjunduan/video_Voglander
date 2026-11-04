@@ -36,6 +36,7 @@ import io.github.lunasaw.voglander.web.api.cascade.req.CascadeRevokeBatchReq;
 import io.github.lunasaw.voglander.web.api.cascade.resp.CascadeRevokeBatchResp;
 import io.github.lunasaw.voglander.web.api.cascade.support.CascadeDeliveryGate;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeOrgVO;
+import io.github.lunasaw.voglander.web.api.cascade.vo.CascadePlatformOrgCatalogVO;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadePublishVO;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeRevokePreviewVO;
 import io.swagger.v3.oas.annotations.Operation;
@@ -284,6 +285,27 @@ public class CascadeOrgController {
         resp.setSucceeded(succeeded);
         resp.setFailed(ids.size() - succeeded);
         return AjaxResult.success(resp);
+    }
+
+    /**
+     * 查询某上级平台目录里的组织（只读）。
+     *
+     * <p><b>为什么必须有这个出口</b>：{@code /tree} 是本地视角，把「推给谁」交给每行的发布配置；
+     * 用户真正想问的是「那个上级到底收到了哪些组织」。两者被发布层与本地启停同时过滤，
+     * 没有这个接口只能逐行人工比对，或者让用户跑到上级平台上去看。
+     *
+     * <p>返回两份清单：目录内（上级这一刻真实存在的节点，带该平台的编码与名称覆盖）与
+     * 阻断（勾了发布却立不起来），后者就是「我明明勾了为什么上级没有」的答案。
+     *
+     * <p>路径不用 {@code /{id}/published}：主语是<b>平台目录</b>而不是某个本地组织；
+     * 平台页的「已推送组织」与组织页的「平台视角」共用这一个出口。
+     */
+    @GetMapping("/published")
+    @Operation(summary = "查询某上级平台目录里的组织",
+        description = "返回该平台目录内立得起来的组织（含平台编码/名称覆盖）与「已勾选但立不起来」的阻断清单")
+    public AjaxResult<CascadePlatformOrgCatalogVO> listPublished(@RequestParam String platformId) {
+        return AjaxResult.success(
+            cascadeWebAssembler.toVO(cascadeOrgManager.platformOrgCatalog(platformId), platformId));
     }
 
     /**

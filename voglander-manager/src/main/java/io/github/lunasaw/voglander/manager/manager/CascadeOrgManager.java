@@ -35,8 +35,10 @@ import io.github.lunasaw.voglander.manager.assembler.CascadeAssembler;
 import io.github.lunasaw.voglander.manager.code.CascadeCodeBuilder;
 import io.github.lunasaw.voglander.manager.code.CascadeCodeBuilder.Segments;
 import io.github.lunasaw.voglander.manager.code.CascadeCodeResolver;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeBlockedOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgCatalog;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgView;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePublishDTO;
@@ -775,14 +777,39 @@ public class CascadeOrgManager {
      * @param platformId 上级平台编码；空白返回空视图
      */
     public CascadePlatformOrgView platformOrgView(String platformId) {
+        return computePlatformCatalog(platformId, false).toView();
+    }
+
+    /**
+     * 某上级平台的「组织视角全貌」：目录内组织 + 通道上浮集合 + 勾了却立不起来的组织。
+     *
+     * <p>页面上的两个问题共用这一份数据：「这个平台收到了哪些组织」「我勾了推送为什么上级没有」。
+     * 它与 {@link #platformOrgView} 走同一次计算——分开算会出现「既不在目录、也不在阻断清单」的幽灵节点。
+     *
+     * <p>阻断清单只收<b>用户确实勾了</b>的组织（发布行 {@code enabled=1}）：没勾的不算阻断，
+     * 那是尚未配置。阻断节点可能是它自己（本地停用）或某个祖先（本地停用 / 未发布到该平台），
+     * 两者在上级的结果一样，但用户要修的地方不同，所以逐条带出阻断节点的编码与名称。
+     *
+     * @param platformId 上级平台编码；空白返回空视图
+     */
+    public CascadePlatformOrgCatalog platformOrgCatalog(String platformId) {
+        return computePlatformCatalog(platformId, true);
+    }
+
+    /**
+     * 目录与阻断清单的唯一计算入口。
+     *
+     * @param withBlocked 协议层只要目录，置 {@code false} 跳过阻断清单的对象构造与排序
+     */
+    private CascadePlatformOrgCatalog computePlatformCatalog(String platformId, boolean withBlocked) {
         if (StringUtils.isBlank(platformId)) {
-            return CascadePlatformOrgView.empty();
+            return CascadePlatformOrgCatalog.empty();
         }
         Map<String, CascadePublishDTO> publishByKey = cascadePublishManager.indexByObjectKey(
             platformId, PublishObjectType.ORG.name(), false);
         if (publishByKey.isEmpty()) {
             log.debug("平台未配置任何组织发布，目录只有域节点: platformId={}", platformId);
-            return CascadePlatformOrgView.empty();
+            return CascadePlatformOrgCatalog.empty();
         }
 
         /* 遍历全量而不是 listEffective()：本地停用的组织同样要让通道决定去留，
@@ -791,15 +818,21 @@ public class CascadeOrgManager {
         Map<Long, CascadeOrgDTO> allById = indexById(all);
         List<CascadePlatformOrgDTO> catalog = new ArrayList<>();
         Set<String> rerouted = new HashSet<>();
+        List<CascadeBlockedOrgDTO> blocked = new ArrayList<>();
         for (CascadeOrgDTO org : all) {
             CascadeOrgDTO blocker = firstPlatformBlocker(org, publishByKey, allById);
             if (blocker == null) {
                 catalog.add(toPlatformOrg(org, publishByKey.get(org.getOrgCode())));
                 continue;
             }
-            /* 阻断节点的策略决定通道归宿：它才是「上级这一刻会收到什么」的直接原因 */
-            if (RevokePolicy.REROUTE.equals(policyOf(publishByKey.get(blocker.getOrgCode())))) {
+            /* 阻断节点的策略决定通道归宿：它才是「上级这一刻会收到什么」的直接原因。
+               上浮集合与阻断明细各用一次：只有已勾选的组织才进阻断清单 */
+            boolean channelRerouted = RevokePolicy.REROUTE.equals(policyOf(publishByKey.get(blocker.getOrgCode())));
+            if (channelRerouted) {
                 rerouted.add(org.getOrgCode());
+            }
+            if (withBlocked && isPublishEnabled(publishByKey.get(org.getOrgCode()))) {
+                blocked.add(toBlockedOrg(org, blocker, channelRerouted));
             }
         }
 
@@ -812,8 +845,44 @@ public class CascadeOrgManager {
         }
         catalog.sort(Comparator.comparing((CascadePlatformOrgDTO o) -> o.getSortOrder() == null ? 0 : o.getSortOrder())
             .thenComparing(o -> o.getId() == null ? 0L : o.getId()));
-        log.debug("平台组织视图: platformId={}, 目录内={}, 通道上浮={}", platformId, catalog.size(), rerouted.size());
-        return new CascadePlatformOrgView(catalog, rerouted);
+        blocked.sort(Comparator.comparing(o -> o.getId() == null ? 0L : o.getId()));
+        log.debug("平台组织视图: platformId={}, 目录内={}, 通道上浮={}, 已勾选但阻断={}",
+            platformId, catalog.size(), rerouted.size(), blocked.size());
+        return new CascadePlatformOrgCatalog(catalog, rerouted, blocked);
+    }
+
+    /** 发布行是否为「用户勾了要推」；没有发布行即未配置，不算阻断。 */
+    private static boolean isPublishEnabled(CascadePublishDTO publish) {
+        return publish != null && Integer.valueOf(1).equals(publish.getEnabled());
+    }
+
+    /** 已勾选发布却立不起来的组织 → 阻断明细，阻断节点自带编码与名称，页面不必再查一次。 */
+    private CascadeBlockedOrgDTO toBlockedOrg(CascadeOrgDTO org, CascadeOrgDTO blocker, boolean rerouted) {
+        CascadeBlockedOrgDTO dto = new CascadeBlockedOrgDTO();
+        dto.setId(org.getId());
+        dto.setLocalCode(org.getOrgCode());
+        dto.setName(org.getOrgName());
+        dto.setBlockedByCode(blocker.getOrgCode());
+        dto.setBlockedByName(blocker.getOrgName());
+        dto.setReason(blockerReason(org, blocker));
+        dto.setRerouted(rerouted);
+        return dto;
+    }
+
+    /**
+     * 阻断原因：自己停用与祖先阻断的修复入口完全不同（一个改本地启停、一个补发布），必须分开报。
+     *
+     * <p>「自己未发布」走不到这里——调用方已过滤成「发布行 enabled=1」；保留该分支是为了
+     * 将来放开过滤时不会静默给出错误原因。
+     */
+    private String blockerReason(CascadeOrgDTO org, CascadeOrgDTO blocker) {
+        boolean localDisabled = blocker.getEnabled() == null || blocker.getEnabled() != 1;
+        if (Objects.equals(org.getId(), blocker.getId())) {
+            return localDisabled ? CascadeBlockedOrgDTO.REASON_LOCAL_DISABLED
+                : CascadeBlockedOrgDTO.REASON_ANCESTOR_NOT_PUBLISHED;
+        }
+        return localDisabled ? CascadeBlockedOrgDTO.REASON_ANCESTOR_LOCAL_DISABLED
+            : CascadeBlockedOrgDTO.REASON_ANCESTOR_NOT_PUBLISHED;
     }
 
     /**
