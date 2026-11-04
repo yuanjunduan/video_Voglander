@@ -89,6 +89,20 @@ class CascadeChannelManagerTest extends BaseTest {
         return deviceId;
     }
 
+    /**
+     * 把本地通道的归属组织设成 {@code orgId}。
+     *
+     * <p>目录里挂在哪个父节点只看本地台账（{@code tb_device_channel.org_id}），发布行上不再有
+     * 「按平台的父节点覆盖」，所以组织门禁用例必须在本地通道上设归属才有意义。
+     */
+    private void assignLocalOrg(String localChannelId, Long orgId) {
+        DeviceChannelDTO query = new DeviceChannelDTO();
+        query.setChannelId(localChannelId);
+        DeviceChannelDTO patch = new DeviceChannelDTO();
+        patch.setOrgId(orgId);
+        deviceChannelManager.update(query, patch);
+    }
+
     @Nested
     @DisplayName("add - 新增级联通道")
     class Add {
@@ -238,14 +252,15 @@ class CascadeChannelManagerTest extends BaseTest {
             String platformId = UniqueKeyFactory.deviceId();
             Long orgId = cascadeOrgManager.add(org(platformId, null, "一层"));
 
-            CascadeChannelDTO dto = buildDto(platformId, UniqueKeyFactory.channelId());
-            dto.setCascadeOrgId(cascadeOrgManager.getById(orgId).getOrgCode());
-            Long channelId = cascadeChannelManager.add(dto);
-            cascadeChannelManager.revoke(channelId);
+            String localChannelId = UniqueKeyFactory.channelId();
+            CascadeChannelDTO dto = buildDto(platformId, localChannelId);
+            assignLocalOrg(localChannelId, orgId);
+            Long publishId = cascadeChannelManager.add(dto);
+            cascadeChannelManager.revoke(publishId);
             cascadeOrgManager.disable(orgId);
 
-            assertThrows(IllegalArgumentException.class, () -> cascadeChannelManager.publish(channelId));
-            assertEquals(0, cascadeChannelManager.getById(channelId).getEnabled(),
+            assertThrows(IllegalArgumentException.class, () -> cascadeChannelManager.publish(publishId));
+            assertEquals(0, cascadeChannelManager.getById(publishId).getEnabled(),
                 "被拒绝的恢复不能悄悄把开关改成上报");
         }
 
@@ -254,17 +269,17 @@ class CascadeChannelManagerTest extends BaseTest {
         void publish_should_reject_when_ancestor_revoked() {
             String platformId = UniqueKeyFactory.deviceId();
             Long[] orgs = twoLevelOrg(platformId);
-            String childCode = cascadeOrgManager.getById(orgs[1]).getOrgCode();
 
-            CascadeChannelDTO dto = buildDto(platformId, UniqueKeyFactory.channelId());
-            dto.setCascadeOrgId(childCode);
-            Long channelId = cascadeChannelManager.add(dto);
-            cascadeChannelManager.revoke(channelId);
+            String localChannelId = UniqueKeyFactory.channelId();
+            CascadeChannelDTO dto = buildDto(platformId, localChannelId);
+            assignLocalOrg(localChannelId, orgs[1]);
+            Long publishId = cascadeChannelManager.add(dto);
+            cascadeChannelManager.revoke(publishId);
             cascadeOrgManager.disable(orgs[0]);
 
             assertEquals(1, cascadeOrgManager.getById(orgs[1]).getEnabled(), "前提：子组织自身开关还是上报");
-            assertThrows(IllegalArgumentException.class, () -> cascadeChannelManager.publish(channelId));
-            assertEquals(0, cascadeChannelManager.getById(channelId).getEnabled());
+            assertThrows(IllegalArgumentException.class, () -> cascadeChannelManager.publish(publishId));
+            assertEquals(0, cascadeChannelManager.getById(publishId).getEnabled());
         }
 
         @Test
@@ -273,17 +288,18 @@ class CascadeChannelManagerTest extends BaseTest {
             String platformId = UniqueKeyFactory.deviceId();
             Long[] orgs = twoLevelOrg(platformId);
 
-            CascadeChannelDTO dto = buildDto(platformId, UniqueKeyFactory.channelId());
-            dto.setCascadeOrgId(cascadeOrgManager.getById(orgs[1]).getOrgCode());
-            Long channelId = cascadeChannelManager.add(dto);
-            cascadeChannelManager.revoke(channelId);
+            String localChannelId = UniqueKeyFactory.channelId();
+            CascadeChannelDTO dto = buildDto(platformId, localChannelId);
+            assignLocalOrg(localChannelId, orgs[1]);
+            Long publishId = cascadeChannelManager.add(dto);
+            cascadeChannelManager.revoke(publishId);
             cascadeOrgManager.disable(orgs[0]);
 
             CascadeChannelDTO patch = new CascadeChannelDTO();
-            patch.setId(channelId);
+            patch.setId(publishId);
             patch.setEnabled(1);
             assertThrows(IllegalArgumentException.class, () -> cascadeChannelManager.update(patch));
-            assertEquals(0, cascadeChannelManager.getById(channelId).getEnabled());
+            assertEquals(0, cascadeChannelManager.getById(publishId).getEnabled());
         }
 
         @Test
@@ -293,11 +309,12 @@ class CascadeChannelManagerTest extends BaseTest {
             Long[] orgs = twoLevelOrg(platformId);
             cascadeOrgManager.disable(orgs[0]);
 
-            CascadeChannelDTO dto = buildDto(platformId, UniqueKeyFactory.channelId());
-            dto.setCascadeOrgId(cascadeOrgManager.getById(orgs[1]).getOrgCode());
+            String localChannelId = UniqueKeyFactory.channelId();
+            CascadeChannelDTO dto = buildDto(platformId, localChannelId);
+            assignLocalOrg(localChannelId, orgs[1]);
 
             assertThrows(IllegalArgumentException.class, () -> cascadeChannelManager.add(dto));
-            assertNull(cascadeChannelManager.getByPlatformAndChannel(platformId, dto.getLocalChannelId()),
+            assertNull(cascadeChannelManager.getByPlatformAndChannel(platformId, localChannelId),
                 "拒绝后不能留下半条记录");
         }
 
@@ -307,13 +324,14 @@ class CascadeChannelManagerTest extends BaseTest {
             String platformId = UniqueKeyFactory.deviceId();
             Long[] orgs = twoLevelOrg(platformId);
 
-            CascadeChannelDTO dto = buildDto(platformId, UniqueKeyFactory.channelId());
-            dto.setCascadeOrgId(cascadeOrgManager.getById(orgs[1]).getOrgCode());
-            Long channelId = cascadeChannelManager.add(dto);
-            cascadeChannelManager.revoke(channelId);
+            String localChannelId = UniqueKeyFactory.channelId();
+            CascadeChannelDTO dto = buildDto(platformId, localChannelId);
+            assignLocalOrg(localChannelId, orgs[1]);
+            Long publishId = cascadeChannelManager.add(dto);
+            cascadeChannelManager.revoke(publishId);
 
-            assertTrue(cascadeChannelManager.publish(channelId));
-            assertEquals(1, cascadeChannelManager.getById(channelId).getEnabled());
+            assertTrue(cascadeChannelManager.publish(publishId));
+            assertEquals(1, cascadeChannelManager.getById(publishId).getEnabled());
         }
     }
 

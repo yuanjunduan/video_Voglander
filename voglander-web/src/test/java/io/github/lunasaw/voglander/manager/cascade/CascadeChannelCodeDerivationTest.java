@@ -15,6 +15,7 @@ import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePublishDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadeChannelManager;
 import io.github.lunasaw.voglander.manager.manager.CascadePublishManager;
+import io.github.lunasaw.voglander.manager.manager.DeviceChannelManager;
 
 /**
  * 通道上报编码的生成时序：<b>先建发布行 → 再 resolve → 后回填</b>。
@@ -47,6 +48,9 @@ class CascadeChannelCodeDerivationTest {
 
         ReflectionTestUtils.setField(cascadeChannelManager, "cascadePublishManager", cascadePublishManager);
         ReflectionTestUtils.setField(cascadeChannelManager, "cascadeCodeResolver", cascadeCodeResolver);
+        /* 归属校验会回查本地通道：这里查不到（null）就放行，不干扰编码时序本身 */
+        ReflectionTestUtils.setField(cascadeChannelManager, "deviceChannelManager",
+            mock(DeviceChannelManager.class));
 
         when(cascadePublishManager.publish(any())).thenReturn(PUBLISH_ID);
         when(cascadeCodeResolver.resolve(anyString(), anyString(), anyString())).thenReturn(LOCAL_CHANNEL_ID);

@@ -23,8 +23,8 @@ public class CascadeChannelDTO {
      * <p>为空表示跟随设备归属，不是错误：GB28181 的虚拟组织里，通道默认就挂在设备所在组织下。
      * 只有需要把一个通道直属到另一个业务分组时，才给通道自己设一个组织。
      *
-     * <p><b>与发布层的关系</b>：本字段始终是<b>本地</b>编码，同一通道推给两个平台时值相同；
-     * 某个平台要挂到别处，走 {@link #parentKey}，不要改这里。
+     * <p><b>与发布层的关系</b>：本字段始终是<b>本地</b>编码，同一通道推给两个平台时值相同。
+     * 目录里挂到哪个节点只由本地归属推导，发布层不再保存「按平台的父节点覆盖」。
      */
     private String        cascadeOrgId;
 
@@ -35,14 +35,6 @@ public class CascadeChannelDTO {
      * 有设备层时它决定设备节点挂哪（设备不可见则通道也不可见）。
      */
     private String        deviceOrgCode;
-
-    /**
-     * 发布行上的父节点覆盖（{@code tb_cascade_publish.parent_key}），空=按本地结构推导。
-     *
-     * <p>这是「同一通道在不同上级挂不同父节点」的唯一入口。父节点可以是组织，也可以是设备（
-     * 开了设备层时），所以它存的是业务键而不是组织编码。
-     */
-    private String        parentKey;
 
     private Integer       enabled;
 

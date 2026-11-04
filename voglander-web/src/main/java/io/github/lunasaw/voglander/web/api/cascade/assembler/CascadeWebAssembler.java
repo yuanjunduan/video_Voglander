@@ -499,7 +499,8 @@ public class CascadeWebAssembler {
             }
             CascadeChannelDTO dto = new CascadeChannelDTO();
             dto.setPlatformId(req.getPlatformId());
-            dto.setCascadeOrgId(req.getCascadeOrgId());
+            /* 批次上的 cascadeOrgId 不再透传：挂载位置只看通道自身的本地归属，
+               回填它只会让调用方以为还能按批次指定父节点 */
             dto.setLocalDeviceId(item.getLocalDeviceId());
             dto.setLocalChannelId(item.getLocalChannelId());
             dto.setCascadeChannelId(item.getCascadeChannelId());

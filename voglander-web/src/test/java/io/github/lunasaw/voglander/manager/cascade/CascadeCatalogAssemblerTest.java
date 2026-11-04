@@ -344,39 +344,45 @@ class CascadeCatalogAssemblerTest {
     }
 
     @Test
-    @DisplayName("发布行 parent_key 命中时优先于本地结构推导")
-    void parent_key_override_wins() {
+    @DisplayName("通道自身组织优先于设备节点，不会被设备层劫持")
+    void channel_own_org_wins_over_device_node() {
+        when(cascadePlatformManager.getByPlatformId(PLATFORM_ID)).thenReturn(platform(1));
         CascadePlatformOrgDTO top = platformOrg(1L, ORG_TOP, ORG_TOP, null, "一层", 1);
         CascadePlatformOrgDTO sub = platformOrg(2L, ORG_SUB, ORG_SUB, ORG_TOP, "二层", 2);
         when(cascadeOrgManager.platformOrgView(PLATFORM_ID))
             .thenReturn(new CascadePlatformOrgView(List.of(top, sub), Set.of()));
+        when(publishedAssetResolver.listDevices(PLATFORM_ID)).thenReturn(List.of(device(ORG_TOP)));
 
         CascadeChannelDTO channel = channel(ORG_SUB);
-        channel.setParentKey(ORG_TOP);
+        channel.setDeviceOrgCode(ORG_TOP);
         when(publishedAssetResolver.listChannels(PLATFORM_ID)).thenReturn(List.of(channel));
 
         List<CascadeCatalogNode> nodes = assembler.assemble(PLATFORM_ID, PLATFORM_ID);
 
-        assertEquals(ORG_TOP, nodes.get(nodes.size() - 1).parentId(),
-            "同一通道在不同上级可以挂不同父节点，parent_key 优先");
+        CascadeCatalogNode ch = nodes.get(nodes.size() - 1);
+        assertEquals(ORG_SUB, ch.parentId(),
+            "挂载位置只看本地归属，设备节点不能把已归属的通道拉走: " + ch);
     }
 
     @Test
-    @DisplayName("parent_key 指向不在该平台目录里的节点时回落本地结构，不造孤儿")
-    void parent_key_pointing_outside_catalog_falls_back() {
-        CascadePlatformOrgDTO top = platformOrg(1L, ORG_TOP, ORG_TOP, null, "一层", 1);
-        CascadePlatformOrgDTO sub = platformOrg(2L, ORG_SUB, ORG_SUB, ORG_TOP, "二层", 2);
+    @DisplayName("设备节点被丢弃时，仍有可见归属的通道照常上报")
+    void channel_survives_missing_device_node() {
+        when(cascadePlatformManager.getByPlatformId(PLATFORM_ID)).thenReturn(platform(1));
+        /* 设备所属的 ORG_TOP 不在该平台目录里 → 设备节点被丢掉，但通道自己的 ORG_SUB 在 */
+        CascadePlatformOrgDTO sub = platformOrg(2L, ORG_SUB, ORG_SUB, null, "二层", 1);
         when(cascadeOrgManager.platformOrgView(PLATFORM_ID))
-            .thenReturn(new CascadePlatformOrgView(List.of(top, sub), Set.of()));
+            .thenReturn(new CascadePlatformOrgView(List.of(sub), Set.of()));
+        when(publishedAssetResolver.listDevices(PLATFORM_ID)).thenReturn(List.of(device(ORG_TOP)));
 
         CascadeChannelDTO channel = channel(ORG_SUB);
-        channel.setParentKey("34020000002150009999");
+        channel.setDeviceOrgCode(ORG_TOP);
         when(publishedAssetResolver.listChannels(PLATFORM_ID)).thenReturn(List.of(channel));
 
         List<CascadeCatalogNode> nodes = assembler.assemble(PLATFORM_ID, PLATFORM_ID);
 
-        assertEquals(ORG_SUB, nodes.get(nodes.size() - 1).parentId(),
-            "目标节点不存在时只能回落本地归属，否则上级拿到一条挂不住的节点");
+        assertEquals(3, nodes.size(), "域 + ORG_SUB + 通道，设备节点被丢弃: " + nodes);
+        assertTrue(nodes.stream().noneMatch(n -> n.kind() == CascadeCatalogNode.Kind.DEVICE));
+        assertEquals(ORG_SUB, nodes.get(2).parentId(), "通道自己的归属可见就不该跟着设备一起消失");
     }
 
     private int countOccurrences(String haystack, String needle) {

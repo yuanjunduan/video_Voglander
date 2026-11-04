@@ -57,17 +57,9 @@ public class CascadeChannelVO implements Serializable {
      * 本地归属的级联组织编码（空 = 跟随设备归属）。
      *
      * <p>这是<b>本地资产</b>上的归属，同一通道推给多个平台时值相同；
-     * 某个平台要挂到别处看 {@link #parentKey}。
+     * 目录里挂在哪个父节点完全由它推导，没有按平台的覆盖。
      */
     private String  cascadeOrgId;
-
-    /**
-     * 该平台下的父节点覆盖（空 = 按本地结构推导）。
-     *
-     * <p>与 {@link #cascadeOrgId} 分开出参，页面才能区分「本地归属」与「这个平台上挂在哪」：
-     * 前者在本地通道上改一次对所有平台生效，后者只影响本平台。
-     */
-    private String  parentKey;
 
     /**
      * 启用状态 1启用 / 0停用
@@ -125,7 +117,6 @@ public class CascadeChannelVO implements Serializable {
         vo.setCascadeChannelId(dto.getCascadeChannelId());
         vo.setCascadeName(dto.getCascadeName());
         vo.setCascadeOrgId(dto.getCascadeOrgId());
-        vo.setParentKey(dto.getParentKey());
         vo.setEnabled(dto.getEnabled());
         /* 覆盖值先铺底；最终上报值由 Controller 叠加派生结果后回写这五项 */
         vo.setManufacturer(dto.getManufacturer());

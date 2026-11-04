@@ -312,7 +312,7 @@ public class CascadeCatalogAssembler {
     /**
      * 某平台目录的父节点索引：本地标识 → 上级眼里的编码。
      *
-     * <p>把三种父节点来源（组织、设备、发布行指定）汇总成一处查询，是为了让「挂哪个节点」
+     * <p>把两种父节点来源（组织、设备）汇总成一处查询，是为了让「挂哪个节点」
      * 只在一个地方回答。散布在组装流程里的多段 if 很容易出现「通道挂到组织、事件却报到设备」这种错位。
      */
     private static final class CatalogParentIndex {
@@ -357,27 +357,26 @@ public class CascadeCatalogAssembler {
         }
 
         /**
-         * 通道挂到哪个节点下（五级解析，前一级不可用才看下一级）。
+         * 通道挂到哪个节点下（四级解析，前一级不可用才看下一级）。
          *
          * <ol>
-         *   <li>发布行指定了 {@code parent_key} 且该节点在该平台目录里 → 用它的编码</li>
          *   <li>通道<b>自己</b>归属的组织可见 → 组织节点</li>
          *   <li>设备已发布且设备层开启 → 设备节点</li>
          *   <li>设备归属的组织可见 → 组织节点（无设备层时的常规归宿）</li>
          *   <li>都不行：归属组织配了 {@code REROUTE} → 域节点；无归属 → 域节点；否则丢弃</li>
          * </ol>
          *
-         * <p>第 2 级一旦命中就不再看设备层：通道显式直挂组织是业务分组意图，
+         * <p>第 1 级一旦命中就不再看设备层：通道显式直挂组织是业务分组意图，
          * 开了设备层不能把它悄悄挪到设备下面。组织不可见时也不回落到设备，
          * 而是按该组织的策略处理——否则用户停用一个组织，其下通道会从那个组织“搬家”到设备层。
+         *
+         * <p><b>没有「发布行指定父节点」这一级</b>：那个覆盖曾允许同一通道在不同上级挂不同父节点，
+         * 实际用起来必然出现「改了本地组织、上级目录不动」的错位（快照是增量 upsert，旧位置不会自己消失），
+         * 且改挂后没有任何报文能让上级重建父子关系。目录结构现在只有本地归属一个真相。
          *
          * @return 父节点编码；返回 null 表示该通道不上报
          */
         private String resolveChannelParent(CascadeChannelDTO channel) {
-            String overridden = resolveOverride(channel);
-            if (overridden != null) {
-                return overridden;
-            }
             String ownOrg = StringUtils.trimToNull(channel.getCascadeOrgId());
             if (ownOrg != null) {
                 return visibleOrPolicy(ownOrg, channel.getCascadeChannelId());
@@ -392,28 +391,6 @@ public class CascadeCatalogAssembler {
             }
             /* 既无自身归属也无设备归属：挂域节点是允许的（早期行为已如此，上级能看到通道） */
             return domainId;
-        }
-
-        /**
-         * 第 1 级：发布行的父节点覆盖。
-         *
-         * <p>目标节点不在该平台目录里时不能直接用它的编码——那会得到一条挂不住的孤儿，
-         * 因此只告警并回落到本地结构推导。
-         */
-        private String resolveOverride(CascadeChannelDTO channel) {
-            String parentKey = channel.getParentKey();
-            if (parentKey == null) {
-                return null;
-            }
-            String code = orgCodeByLocal.get(parentKey);
-            if (code == null) {
-                code = deviceCodeByLocal.get(parentKey);
-            }
-            if (code == null) {
-                log.warn("通道的父节点覆盖指向的节点不在该平台目录内，改按本地结构推导: cascadeChannelId={}, parentKey={}",
-                    channel.getCascadeChannelId(), parentKey);
-            }
-            return code;
         }
 
         /**

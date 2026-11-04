@@ -33,9 +33,9 @@ import lombok.extern.slf4j.Slf4j;
  * 收敛后本类只读写 {@code tb_cascade_publish}，名称、归属、本地启停、元数据全部由
  * {@link CascadePublishedAssetResolver} 从本地资产表派生，不再维护第二份真相。
  *
- * <p><b>对外契约不变</b>：{@code id} 是发布行主键，{@code localDeviceId/localChannelId} 是本地资产标识，
- * {@code cascadeOrgId} 是通道在本地的组织归属，{@code parentKey} 是该平台下的父节点覆盖
- * （同一通道在不同上级挂不同父节点的唯一入口）。前端与集成层拿到的字段与之前完全一致。
+ * <p><b>组织归属只有一份</b>：{@code id} 是发布行主键，{@code localDeviceId/localChannelId} 是本地资产标识，
+ * {@code cascadeOrgId} 是通道在本地的组织归属。目录里挂在哪个父节点完全由这份归属（以及设备的组织）
+ * 推导，不再保存「按平台的父节点覆盖」——同一通道推给 N 个上级时结构一致。
  */
 @Slf4j
 @Component
@@ -89,7 +89,9 @@ public class CascadeChannelManager {
            留空先落空，由下面的 resolve 按规则生成并固化 */
         publish.setPublishCode(StringUtils.trimToNull(dto.getCascadeChannelId()));
         publish.setPublishName(dto.getCascadeName());
-        publish.setParentKey(normalizeOrgCode(dto.getPlatformId(), dto.getCascadeOrgId()));
+        /* 组织归属只在本地台账（tb_device_channel.org_id），发布行不再保存按平台的父节点覆盖。
+           落库前先确认该组织在这个平台目录里立得起来，否则上级侧表现为「收到但挂不住」 */
+        assertLocalOrgVisible(dto.getPlatformId(), dto.getLocalChannelId());
         publish.setEnabled(dto.getEnabled() == null ? 1 : dto.getEnabled());
         copyMeta(dto, publish);
         Long id = cascadePublishManager.publish(publish);
@@ -184,8 +186,8 @@ public class CascadeChannelManager {
     /**
      * 更新级联通道发布配置。
      *
-     * <p>{@code cascadeOrgId} 三态语义：{@code null} 不动父节点覆盖；空串摘掉覆盖、回落到本地结构；
-     * 非空挂到该组织。之所以要单独处理空串，是因为「按本地结构挂」与「这次没传」必须能区分开。
+     * <p><b>不再接受「按平台的父节点覆盖」</b>：目录里挂在哪个节点完全由本地组织归属推导
+     * （通道自身组织 → 设备节点 → 设备组织 → 域节点）。想改挂位置就去改通道/设备的本地归属。
      *
      * <p><b>启停不只是改字段</b>：{@code 1 -> 0} 必须显式推 {@code Event=DEL}，否则上级目录里的
      * 通道会永久留着（快照是增量 upsert 语义，不会因为节点「这次没出现」就删）；
@@ -195,17 +197,13 @@ public class CascadeChannelManager {
         Assert.notNull(dto.getId(), "id 不能为空");
         CascadeChannelDTO existed = getById(dto.getId());
         Assert.notNull(existed, "级联通道不存在: id=" + dto.getId());
-        String  platformId   = existed.getPlatformId();
-        String  objectKey    = objectKeyOf(existed);
-        boolean orgIdTouched = dto.getCascadeOrgId() != null;
-        String  orgCode      = orgIdTouched ? normalizeOrgCode(platformId, dto.getCascadeOrgId()) : null;
-        boolean orgChanged   = orgIdTouched && !StringUtils.equals(effectiveParentOf(existed), orgCode);
-        boolean wasEnabled   = existed.getEnabled() == null || existed.getEnabled() == 1;
-        boolean nowEnabled   = dto.getEnabled() == null ? wasEnabled : dto.getEnabled() == 1;
-        /* 0 -> 1 是「重新上报」：归属组织的整条祖先链都得在报，否则推上去又是一条孤儿；
-           换组织时 normalizeOrgCode 已经校验过目标组织，不必重复回表 */
-        if (!wasEnabled && nowEnabled && !orgIdTouched) {
-            assertParentVisible(platformId, effectiveParentOf(existed));
+        String  platformId = existed.getPlatformId();
+        String  objectKey  = objectKeyOf(existed);
+        boolean wasEnabled = existed.getEnabled() == null || existed.getEnabled() == 1;
+        boolean nowEnabled = dto.getEnabled() == null ? wasEnabled : dto.getEnabled() == 1;
+        /* 0 -> 1 是「重新上报」：归属组织的整条祖先链都得在报，否则推上去又是一条孤儿 */
+        if (!wasEnabled && nowEnabled) {
+            assertParentVisible(platformId, existed.getCascadeOrgId());
         }
 
         CascadePublishDTO patch = new CascadePublishDTO();
@@ -220,11 +218,6 @@ public class CascadeChannelManager {
         patch.setEnabled(dto.getEnabled());
         copyMeta(dto, patch);
         cascadePublishManager.publish(patch);
-        if (orgIdTouched) {
-            /* 传空串才是「摘掉覆盖」；null 在上面已经被解释成「这次不动」 */
-            cascadePublishManager.setParentKey(platformId, PUBLISH_TYPE, objectKey,
-                StringUtils.defaultString(orgCode));
-        }
 
         if (wasEnabled && !nowEnabled) {
             /* 删的是上级眼里那个节点，编码变过也要用改之前的 */
@@ -232,9 +225,6 @@ public class CascadeChannelManager {
         } else if (!wasEnabled && nowEnabled) {
             publishEvent(platformId,
                 StringUtils.defaultIfBlank(dto.getCascadeChannelId(), existed.getCascadeChannelId()), "ADD");
-        } else if (orgChanged) {
-            /* 换组织改变的是父子关系，增量条目表达不了，由事件桥接重推整棵目录 */
-            publishEvent(platformId, existed.getCascadeChannelId(), "UPDATE");
         }
         return true;
     }
@@ -272,7 +262,7 @@ public class CascadeChannelManager {
         Assert.notNull(id, "id 不能为空");
         CascadeChannelDTO existed = getById(id);
         Assert.notNull(existed, "级联通道不存在: id=" + id);
-        assertParentVisible(existed.getPlatformId(), effectiveParentOf(existed));
+        assertParentVisible(existed.getPlatformId(), existed.getCascadeOrgId());
         boolean ok = cascadePublishManager.setEnabled(existed.getPlatformId(), PUBLISH_TYPE,
             objectKeyOf(existed), 1);
         if (ok) {
@@ -357,8 +347,8 @@ public class CascadeChannelManager {
     /**
      * 分页条件匹配。
      *
-     * <p>{@code cascadeOrgId} 同时看本地归属与发布行覆盖：开了设备层的平台，通道挂在设备节点下，
-     * 覆盖值是设备业务键；只按本地归属筛会把这类通道整片漏掉。
+     * <p>{@code cascadeOrgId} 只比本地归属：发布层不再有「按平台的父节点覆盖」，
+     * 不存在「归属对不上但覆盖对得上」的通道。
      */
     private boolean matches(CascadeChannelDTO channel, CascadeChannelDTO condition, Set<String> orgFilter) {
         if (StringUtils.isNotBlank(condition.getLocalDeviceId())
@@ -376,9 +366,7 @@ public class CascadeChannelManager {
         if (orgFilter == null) {
             return true;
         }
-        boolean localHit = channel.getCascadeOrgId() != null && orgFilter.contains(channel.getCascadeOrgId());
-        boolean overrideHit = channel.getParentKey() != null && orgFilter.contains(channel.getParentKey());
-        return localHit || overrideHit;
+        return channel.getCascadeOrgId() != null && orgFilter.contains(channel.getCascadeOrgId());
     }
 
     /**
@@ -427,35 +415,31 @@ public class CascadeChannelManager {
     }
 
     /**
-     * 校验并规整组织的归属编码：空白归一为 null（挂平台根节点），非空必须是上级目录里真实可见的组织。
+     * 校验本地归属组织在这个平台目录里立得起来。
      *
-     * <p>校验放在写入口而非出参组装：脏归属一旦落库，上级侧表现为「通道收得到但不挂在任何组织下」，
-     * 或者被快照直接剪掉（组织取消同步且策略为 CASCADE）——页面显示上报中，上级却一条也看不到。
+     * <p>组织归属只来自本地台账（{@code tb_device_channel.org_id}），所以校验要在写入口做：
+     * 脏归属一旦落库，上级侧表现为「通道收得到但不挂在任何组织下」，或者被快照直接剪掉
+     * （组织取消同步且策略为 CASCADE）——页面显示上报中，上级却一条也看不到。
+     *
+     * <p>没有归属、或归属的组织已被删除时放行：这两种情况下上级侧是「挂到域节点」，不是脏数据。
      */
-    private String normalizeOrgCode(String platformId, String cascadeOrgId) {
-        if (StringUtils.isBlank(cascadeOrgId)) {
-            return null;
+    private void assertLocalOrgVisible(String platformId, String localChannelId) {
+        DeviceChannelDO local = deviceChannelManager.getByChannelId(localChannelId);
+        if (local == null || local.getOrgId() == null) {
+            return;
         }
-        CascadeOrgDTO org = cascadeOrgManager.getByCode(cascadeOrgId);
-        Assert.notNull(org, "级联组织不存在: orgCode=" + cascadeOrgId);
-        assertVisible(platformId, org);
-        return cascadeOrgId;
+        CascadeOrgDTO org = cascadeOrgManager.getById(local.getOrgId());
+        if (org != null) {
+            assertVisible(platformId, org);
+        }
     }
 
     /**
-     * 上级实际看到的父节点：发布行覆盖优先，为空才回落到本地归属。
+     * 组织可见性校验（容错版）：编码查不到组织时直接放行。
      *
-     * <p>两者要分开看：本地归属是“这路通道属于哪个业务分组”，覆盖是“这个平台把它挂在谁下面”。
-     */
-    private String effectiveParentOf(CascadeChannelDTO channel) {
-        return StringUtils.defaultIfBlank(channel.getParentKey(), channel.getCascadeOrgId());
-    }
-
-    /**
-     * 父节点可见性校验。
-     *
-     * <p>编码查不到组织时直接放行：开了设备层的平台，{@code parent_key} 可以是设备业务键，
-     * 设备能不能立起来由目录组装器判断，不该在这里误报“组织不存在”。
+     * <p>通道可能根本没设归属（{@code org_id} 为空，SIP 自动注册带进来的通道就是这样），
+     * 也可能挂的是设备组织。两类情况上级侧都是「挂到域节点」，不是脏数据，不该在这里
+     * 误报「组织不存在」。
      */
     private void assertParentVisible(String platformId, String parentCode) {
         if (StringUtils.isBlank(parentCode)) {

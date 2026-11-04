@@ -247,10 +247,10 @@ public class CascadePublishedAssetResolver {
         dto.setLocalChannelId(row.channelId());
         dto.setCascadeChannelId(CascadeCodeBuilder.effectiveCode(publish.getPublishCode(), row.channelId()));
         dto.setCascadeName(StringUtils.defaultIfBlank(publish.getPublishName(), local.getName()));
-        /* 通道自己的归属优先；为空表示跟随设备，由组装器决定挂设备还是挂设备的组织 */
+        /* 通道自己的归属优先；为空表示跟随设备，由组装器决定挂设备还是挂设备的组织。
+           发布行的 parent_key 不再参与：目录结构只由本地归属一个真相推导 */
         dto.setCascadeOrgId(local.getOrgId() == null ? null : orgCodeById.get(local.getOrgId()));
         dto.setDeviceOrgCode(device.getOrgId() == null ? null : orgCodeById.get(device.getOrgId()));
-        dto.setParentKey(StringUtils.trimToNull(publish.getParentKey()));
         dto.setEnabled(publish.getEnabled() == null ? 1 : publish.getEnabled());
         dto.setManufacturer(publish.getManufacturer());
         dto.setModel(publish.getModel());
