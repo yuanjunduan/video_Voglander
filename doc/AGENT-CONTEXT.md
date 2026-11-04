@@ -127,7 +127,12 @@ mvn test -pl voglander-web -am "-Dtest=Cascade*Test" "-Dsurefire.failIfNoSpecifi
 ### 4.5 停报 / 取消同步的语义
 
 - **取消同步（revoke）**：只把 `enabled` 置 0，本地数据一条不删，随时可恢复；组织侧按 `revokePolicy` 决定通道 `CASCADE`（一起删）或 `REROUTE`（改挂域节点继续上报）。
-- **删除**：物理删除且不可恢复，前置条件是「无子组织、无绑定通道」。
+- **删除**：物理删除且不可恢复；组织删除前置条件是「无子组织、无绑定通道」。
+- **删除必须先取消上报，确认后才动本地**（2026-11-03 改口径，取代此前「先删本地再事后推 DEL」）：设备 / 通道 / 组织三类主动删除一律两段式——`CascadeAssetCleanup.revokeDevice/revokeChannels/revokeOrg` 同步向上级发 `Event=DEL` 并**等该平台回 2xx**（`gateway.cascade.catalog.delete-confirm-timeout-sec`，默认 10s），确认通过才在同一编排里清 `tb_cascade_publish` 行与本地行。**任一平台没确认就整批不删**，抛 `IllegalArgumentException`（文案带平台编码与原因：拒绝响应码 / 无响应 / 发送失败），由 `GlobalExceptionHandler` 转成 `AjaxResult.error` 透到页面。不这么做，上级目录会残留节点、还能对着已不存在的资产发起点播。
+  - 两条放行例外（写在契约 javadoc 里，别在调用方另判）：`PLATFORM_ABSENT`（发布行指向的平台配置已不存在，无处可撤）与 `sip.client.enabled=false` 导致出站 bean 缺失。
+  - **被动路径不阻断**：设备自己上报 Catalog `DEL` 时走 `deleteDeviceChannelUpstreamDeleted`，只清本地 + 发事件通知，不等上级确认——设备台账已经没这路通道了，本端挡住就会与设备长期不一致。
+  - **事务边界**：10s SIP 等待不能困在 DB 事务里（SQLite 是整库写锁），撤销必须在事务外发起，本地删除用 `TransactionTemplate` 收口。
+  - 设备删除编排在 `DeviceRemovalManager`（撤销 → 发布层 → 本地通道 → 设备本体，顺序不可换），`DeviceController` 两个删除接口都走它，**前端不要再自己拼「先删通道再删设备」**。主动路径已同步发过 `DEL`，不能再让 `afterCommit` 事件链路发第二遍；只有被动路径仍按平台在提交后合并成一个 `DEL` 事件（拆开发会被 4 线程的 `sipNotifierExecutor` 乱序执行，父节点先没了子节点的删除会被部分上级忽略）。
 - 快照是**增量 upsert**：节点「这次没出现」不会被上级删除，**必须显式推 `DEL`**。
 
 ---
@@ -200,6 +205,7 @@ npx vitest run apps/web-antd/src/views/cascade
 - 断言报文时**抓 content 断言内容**，不要只断言「调了哪个方法」。
 - 涉及固定常量的全量否定断言容易误伤例外节点（如域节点本就该带 `340200`），改用**出现次数断言**。
 - 已知 flaky：`CascadeMediaInviteListenerTest.reap_idleTimeout_stopsPush` 在整包跑时偶发失败，单独跑稳定通过——先单独复跑再判定是否回归。
+- 已知**环境限制**（不是回归）：`LocalImageStorageServiceTest.keysOutsideNamespaceOrThroughSymlink_shouldBeRejected` 要建符号链接，Windows 非管理员进程报 `FileSystemException: 客户端没有所需的特权`，整个 reactor 会在 `voglander-integration` 就中断、`voglander-web` 根本跑不到。要拿 web 全量证据用 `-Dtest="!LocalImageStorageServiceTest"` 排除（配合 `-Dsurefire.failIfNoSpecifiedTests=false`）。
 
 ---
 
@@ -222,6 +228,10 @@ npx vitest run apps/web-antd/src/views/cascade
 | 13 | 级联报文修改后「没生效」 | 后端还跑着旧 class，必须重启 |
 | 14 | 定时任务类新增后启动即报错/不触发 | 需补 `@TechnicalScheduler` 一类注解与架构测试期望表 |
 | 15 | 改完数据列表依旧值（推送配置后「已推送平台」还是「未推送」） | 组织树在内存里只存一份，`proxyConfig.ajax.query` 读的就是它；抽屉提交成功回调必须先 `invalidateCascadeOrgTree()` 再 `query()`，toolbar 刷新按钮靠 query 收到 `PointerEvent` 才强制重取 |
+| 16 | 删了设备/通道，上级目录里节点还在、页面还显示推送记录 | DEL 与本地删除必须两段式且「先撤销后删本地」（见 4.5）；撤销是同步出站，`DEL` 发了没人 `track` 就等于无法判定取消成功；主动路径不要再走 `afterCommit` 事件链路发第二遍 |
+| 17 | 删除用例集体等满 10s 后报「上级未响应」 | `BaseTest`/`BaseAsyncTest` 启用了 `sip.client.enabled`，真会发 UDP；测试基座必须 `@Import` `CascadeRevokeTestConfig`，用 `@Primary` 的 `StubCascadeCatalogRevokeService` 放行，再按用例 `refuse/noResponse/sendFailed` 复现阻断 |
+| 18 | 撤销逻辑把 SQLite 整库写锁占住 10s | 同步 SIP 等待困在事务里；撤销放事务外，本地删除用 `TransactionTemplate` |
+| 19 | 页面删除失败只看到「操作失败」，看不出哪个平台没确认 | `deleteOne/deleteBatch` 里的 `catch (IllegalArgumentException) { throw e; }` 不能省，否则撤销原因会被洗成通用错误码；全局 `errorMessageResponseInterceptor` 已自动 `message.error` 后端 `message`，页面不要再重复弹一次 |
 
 ---
 
@@ -235,8 +245,10 @@ npx vitest run apps/web-antd/src/views/cascade
 
 ---
 
-## 11. 未闭环事项（2026-10-30）
+## 11. 未闭环事项（2026-11-03）
 
+- 「先撤销后删本地」的删除改造（设备 / 通道 / 组织）**后端未重启验证**；真实上级下的验证点：上级离线时删通道应报「上级未响应撤销请求，本地数据未删除」且刷新后通道还在。
+- 上级不可达时删除会被挡住（严格阻断是用户定的口径）；批删跨设备只能前端逐条 `deleteOne`。
 - `bde8bd4` 里的可见性校验与页面列**尚未重启后端验证**；验证点：停报上级组织后，在子组织下点通道「恢复上报」应报「级联组织【X】处于停报状态，请先恢复它」。
 - 用户在更早一轮挂起的人工动作：向海康发一次 `DEL` 以重建通道 `34020000001320000007`（未执行）。
 - `.fe-staging/`、`.probe/` 长期以未跟踪状态留在工作区，未加入 `.gitignore`（待用户决定）。

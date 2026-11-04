@@ -28,9 +28,15 @@ import io.github.lunasaw.voglander.manager.service.DeviceService;
 import io.github.lunasaw.voglander.repository.entity.DeviceDO;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -116,6 +122,7 @@ public class DeviceManager {
         Assert.hasText(deviceDTO.getIp(), "设备IP不能为空");
         Assert.notNull(deviceDTO.getPort(), "设备端口不能为空");
         Assert.notNull(deviceDTO.getType(), "设备类型不能为空");
+        assertEnabledValid(deviceDTO.getEnabled());
 
         // 检查设备ID是否已存在
         DeviceDTO queryDTO = new DeviceDTO();
@@ -128,6 +135,8 @@ public class DeviceManager {
         try {
             // 转为DO
             DeviceDO deviceDO = deviceAssembler.toDeviceDO(deviceDTO);
+            // 新增时 0 与 null 等价：组织主键从 1 开始，0 永远不是合法组织
+            deviceDO.setOrgId(normalizeOrgId(deviceDTO.getOrgId()));
             deviceDO.setCreateTime(LocalDateTime.now());
             deviceDO.setUpdateTime(LocalDateTime.now());
 
@@ -171,7 +180,10 @@ public class DeviceManager {
                 .eq(queryDTO.getPort() != null, DeviceDO::getPort, queryDTO.getPort())
                 .eq(queryDTO.getServerIp() != null, DeviceDO::getServerIp, queryDTO.getServerIp())
                 .eq(queryDTO.getType() != null, DeviceDO::getType, queryDTO.getType())
-                .last("limit 1");
+                .eq(queryDTO.getEnabled() != null, DeviceDO::getEnabled, queryDTO.getEnabled());
+
+            appendOrgIdCondition(queryWrapper, queryDTO.getOrgId());
+            queryWrapper.last("limit 1");
 
             DeviceDO existingRecord = deviceService.getOne(queryWrapper);
             if (existingRecord == null) {
@@ -193,9 +205,20 @@ public class DeviceManager {
                 updateDO.setCreateTime(existingRecord.getCreateTime());
             }
 
+            assertEnabledValid(updateDTO.getEnabled());
+            // org_id 用 0 表示"清空归属"：updateById 跳过 null 列、无法把"有值"改回"无值"，
+            // 故先把 0 从实体里摘掉，更新成功后再补一条 SET org_id = NULL
+            boolean clearOrgId = updateDTO.getOrgId() != null && updateDTO.getOrgId() == 0L;
+            if (clearOrgId) {
+                updateDO.setOrgId(null);
+            }
+
             boolean success = deviceService.updateById(updateDO);
             if (!success) {
                 throw new ServiceException(ServiceExceptionEnum.DEVICE_OPERATION_FAILED, "数据库更新失败");
+            }
+            if (clearOrgId) {
+                resetOrgId(existingRecord.getId());
             }
 
             clearCache(updateDO.getId(), oldDeviceId, updateDO.getDeviceId());
@@ -237,9 +260,20 @@ public class DeviceManager {
                 updateDO.setCreateTime(existingRecord.getCreateTime());
             }
 
+            assertEnabledValid(updateDTO.getEnabled());
+            // org_id 用 0 表示"清空归属"：updateById 跳过 null 列、无法把"有值"改回"无值"，
+            // 故先把 0 从实体里摘掉，更新成功后再补一条 SET org_id = NULL
+            boolean clearOrgId = updateDTO.getOrgId() != null && updateDTO.getOrgId() == 0L;
+            if (clearOrgId) {
+                updateDO.setOrgId(null);
+            }
+
             boolean success = deviceService.updateById(updateDO);
             if (!success) {
                 throw new ServiceException(ServiceExceptionEnum.DEVICE_OPERATION_FAILED, "数据库更新失败");
+            }
+            if (clearOrgId) {
+                resetOrgId(existingRecord.getId());
             }
 
             clearCache(id, oldDeviceId, updateDO.getDeviceId());
@@ -272,7 +306,10 @@ public class DeviceManager {
                 .eq(deviceDTO.getPort() != null, DeviceDO::getPort, deviceDTO.getPort())
                 .eq(deviceDTO.getServerIp() != null, DeviceDO::getServerIp, deviceDTO.getServerIp())
                 .eq(deviceDTO.getType() != null, DeviceDO::getType, deviceDTO.getType())
-                .last("limit 1");
+                .eq(deviceDTO.getEnabled() != null, DeviceDO::getEnabled, deviceDTO.getEnabled());
+
+            appendOrgIdCondition(queryWrapper, deviceDTO.getOrgId());
+            queryWrapper.last("limit 1");
 
             DeviceDO existingRecord = deviceService.getOne(queryWrapper);
             if (existingRecord == null) {
@@ -400,7 +437,9 @@ public class DeviceManager {
                     .eq(deviceDTO.getIp() != null, DeviceDO::getIp, deviceDTO.getIp())
                     .eq(deviceDTO.getPort() != null, DeviceDO::getPort, deviceDTO.getPort())
                     .eq(deviceDTO.getServerIp() != null, DeviceDO::getServerIp, deviceDTO.getServerIp())
-                    .eq(deviceDTO.getType() != null, DeviceDO::getType, deviceDTO.getType());
+                    .eq(deviceDTO.getType() != null, DeviceDO::getType, deviceDTO.getType())
+                    .eq(deviceDTO.getEnabled() != null, DeviceDO::getEnabled, deviceDTO.getEnabled());
+                appendOrgIdCondition(queryWrapper, deviceDTO.getOrgId());
             }
 
             queryWrapper.orderByDesc(DeviceDO::getCreateTime);
@@ -463,7 +502,9 @@ public class DeviceManager {
                     .ge(query.getKeepaliveTimeStart() != null, DeviceDO::getKeepaliveTime, query.getKeepaliveTimeStart())
                     .le(query.getKeepaliveTimeEnd() != null, DeviceDO::getKeepaliveTime, query.getKeepaliveTimeEnd())
                     .ge(query.getRegisterTimeStart() != null, DeviceDO::getRegisterTime, query.getRegisterTimeStart())
-                    .le(query.getRegisterTimeEnd() != null, DeviceDO::getRegisterTime, query.getRegisterTimeEnd());
+                    .le(query.getRegisterTimeEnd() != null, DeviceDO::getRegisterTime, query.getRegisterTimeEnd())
+                    .eq(query.getEnabled() != null, DeviceDO::getEnabled, query.getEnabled());
+                appendOrgIdCondition(queryWrapper, query.getOrgId());
             }
 
             queryWrapper.orderByDesc(DeviceDO::getCreateTime);
@@ -607,6 +648,99 @@ public class DeviceManager {
         } else {
             log.debug("patchOfflineTerminal 未更新任何记录（设备不存在）- deviceId: {}", deviceId);
         }
+    }
+
+    // ================================
+    // 本地资产层：组织归属与本地启停
+    // ================================
+
+    /**
+     * 统计归属某组织的设备数（不含子组织，子组织先删）。
+     *
+     * @param orgId 组织主键
+     * @return 设备数
+     */
+    public long countByOrgId(Long orgId) {
+        if (orgId == null) {
+            return 0L;
+        }
+        LambdaQueryWrapper<DeviceDO> qw = new LambdaQueryWrapper<>();
+        qw.eq(DeviceDO::getOrgId, orgId);
+        return deviceService.count(qw);
+    }
+
+    /**
+     * 列出某组织下设备的国标 ID（组织占用校验与组装器共用）。
+     *
+     * @param orgId 组织主键
+     * @return 设备国标 ID 列表；orgId 为空返回空列表
+     */
+    public List<String> listDeviceIdsByOrgId(Long orgId) {
+        if (orgId == null) {
+            return Collections.emptyList();
+        }
+        LambdaQueryWrapper<DeviceDO> qw = new LambdaQueryWrapper<>();
+        qw.eq(DeviceDO::getOrgId, orgId).select(DeviceDO::getDeviceId);
+        return deviceService.list(qw).stream()
+            .map(DeviceDO::getDeviceId)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toList());
+    }
+
+    /**
+     * 设备 → 组织归属的轻量投影（只取 {@code device_id} / {@code org_id}），供组织树统计通道数。
+     */
+    public List<DeviceDO> listOrgLinkProjection() {
+        LambdaQueryWrapper<DeviceDO> qw = new LambdaQueryWrapper<>();
+        qw.select(DeviceDO::getDeviceId, DeviceDO::getOrgId)
+            .isNotNull(DeviceDO::getOrgId);
+        return deviceService.list(qw);
+    }
+
+    /**
+     * 组织归属筛选：{@code 0} 表示"未归组织"，按 IS NULL 查；其余按 id 精确匹配。
+     *
+     * <p>{@code null} 表示本次不按组织筛（不限）。
+     */
+    private static void appendOrgIdCondition(LambdaQueryWrapper<DeviceDO> wrapper, Long orgId) {
+        if (orgId == null) {
+            return;
+        }
+        if (orgId == 0L) {
+            wrapper.isNull(DeviceDO::getOrgId);
+        } else {
+            wrapper.eq(DeviceDO::getOrgId, orgId);
+        }
+    }
+
+    /**
+     * 新增时的组织归属归一：{@code 0} 与 {@code null} 等价（组织主键从 1 开始，0 不是合法组织）。
+     */
+    private static Long normalizeOrgId(Long orgId) {
+        return orgId != null && orgId == 0L ? null : orgId;
+    }
+
+    /**
+     * 校验本地启用标记：只接受 0/1，{@code null} 表示本次不改。
+     *
+     * <p>该列决定设备是否进入上级平台目录，脏值（如 2）会让组装器与前端开关判断同时失效。
+     */
+    private static void assertEnabledValid(Integer enabled) {
+        if (enabled != null && enabled != 0 && enabled != 1) {
+            throw new ServiceException(ServiceExceptionEnum.BUSINESS_EXCEPTION, "本地启用标记只能是 0 或 1: " + enabled);
+        }
+    }
+
+    /**
+     * 清空设备的组织归属。
+     *
+     * <p>{@code updateById} 默认跳过 null 列，没有这条定向 UPDATE 就无法把设备从组织里移走。
+     */
+    private void resetOrgId(Long id) {
+        deviceService.lambdaUpdate()
+            .eq(DeviceDO::getId, id)
+            .set(DeviceDO::getOrgId, null)
+            .update();
     }
 
     // ================================
@@ -909,6 +1043,30 @@ public class DeviceManager {
 
     public List<DeviceDO> list() {
         return deviceService.list();
+    }
+
+    /**
+     * 按设备国标 ID 集合批量取设备行（含名称/组织/启停/在线状态）。
+     *
+     * <p>供发布层组装目录时用：发布行只存 {@code device_id}，设备节点名与归属必须回本地表拿；
+     * 逐设备回表在百路规模下就是百次查库。
+     *
+     * @param deviceIds 设备国标 ID 集合
+     * @return 键为 {@code device_id}；集合为空返回空 Map
+     */
+    public Map<String, DeviceDO> mapByDeviceIds(Collection<String> deviceIds) {
+        Map<String, DeviceDO> result = new HashMap<>();
+        if (deviceIds == null || deviceIds.isEmpty()) {
+            return result;
+        }
+        LambdaQueryWrapper<DeviceDO> qw = new LambdaQueryWrapper<>();
+        qw.in(DeviceDO::getDeviceId, deviceIds);
+        for (DeviceDO device : deviceService.list(qw)) {
+            if (device.getDeviceId() != null) {
+                result.put(device.getDeviceId(), device);
+            }
+        }
+        return result;
     }
 
     // ================================

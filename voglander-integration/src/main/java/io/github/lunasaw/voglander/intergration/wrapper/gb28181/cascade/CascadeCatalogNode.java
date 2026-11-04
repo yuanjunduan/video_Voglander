@@ -19,8 +19,10 @@ public record CascadeCatalogNode(String deviceId, String name, String parentId, 
     public enum Kind {
         /** 域节点：本级平台自身，整棵树的根 */
         DOMAIN,
-        /** 组织节点：通道的父节点 */
+        /** 组织节点：设备或通道的父节点 */
         ORG,
+        /** 设备节点：只在平台开了设备层时出现，容纳该设备的通道 */
+        DEVICE,
         /** 通道节点：目录树的叶子 */
         CHANNEL
     }
@@ -28,5 +30,15 @@ public record CascadeCatalogNode(String deviceId, String name, String parentId, 
     /** 是否为根节点（域节点没有父节点）。 */
     public boolean isRoot() {
         return kind == Kind.DOMAIN || parentId == null;
+    }
+
+    /**
+     * GB28181 的 {@code Parental}：0=叶子（监控通道），1=有子节点的目录节点。
+     *
+     * <p>只有通道是叶子。早期实现一律写 {@code 0}，开了设备层后设备下挂着通道还会被当成叶子，
+     * 上级把它当监控点去点播，自然拉不到流。
+     */
+    public int parental() {
+        return kind == Kind.CHANNEL ? 0 : 1;
     }
 }

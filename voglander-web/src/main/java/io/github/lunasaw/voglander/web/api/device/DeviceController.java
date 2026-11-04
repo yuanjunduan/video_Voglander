@@ -11,8 +11,10 @@ import io.github.lunasaw.voglander.intergration.wrapper.rtsp.RtspProbeClient;
 import io.github.lunasaw.voglander.manager.domaon.dto.DeviceDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.DeviceQueryDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.DeviceSubscriptionDTO;
+import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
 import io.github.lunasaw.voglander.manager.manager.DeviceChannelManager;
 import io.github.lunasaw.voglander.manager.manager.DeviceManager;
+import io.github.lunasaw.voglander.manager.manager.DeviceRemovalManager;
 import io.github.lunasaw.voglander.manager.manager.DeviceSubscriptionManager;
 import io.github.lunasaw.voglander.web.api.device.assembler.DeviceWebAssembler;
 import io.github.lunasaw.voglander.web.api.device.req.DeviceCreateReq;
@@ -58,6 +60,12 @@ public class DeviceController {
     private DeviceManager deviceManager;
 
     @Autowired
+    private DeviceRemovalManager deviceRemovalManager;
+
+    @Autowired
+    private CascadeOrgManager cascadeOrgManager;
+
+    @Autowired
     private DeviceChannelManager deviceChannelManager;
 
     @Autowired
@@ -87,11 +95,28 @@ public class DeviceController {
 
         // 批量回填三类订阅意图状态（避免 N+1）
         fillSubscriptionState(items);
+        // 批量回填组织名称（避免 N+1）
+        fillOrgName(items);
 
         DeviceListResp resp = new DeviceListResp();
         resp.setTotal(dtoPage.getTotal());
         resp.setItems(items);
         return AjaxResult.success(resp);
+    }
+
+    /**
+     * 批量回填所属组织名称：列表只回传 orgId，名称用一次组织树索引补齐。
+     */
+    private void fillOrgName(List<DeviceVO> items) {
+        if (items == null || items.isEmpty()) {
+            return;
+        }
+        java.util.Map<Long, String> nameById = cascadeOrgManager.nameIndexById();
+        for (DeviceVO vo : items) {
+            if (vo.getOrgId() != null) {
+                vo.setOrgName(nameById.get(vo.getOrgId()));
+            }
+        }
     }
 
     /**
@@ -131,6 +156,7 @@ public class DeviceController {
             return AjaxResult.error("设备不存在");
         }
         DeviceVO deviceVO = DeviceVO.convertVO(deviceDTO);
+        fillOrgName(java.util.Collections.singletonList(deviceVO));
         return AjaxResult.success(deviceVO);
     }
 
@@ -273,15 +299,17 @@ public class DeviceController {
     }
 
     @DeleteMapping("/delete/{id}")
-    @Operation(summary = "删除设备", description = "根据ID删除设备")
+    @Operation(summary = "删除设备",
+        description = "级联删除：该设备下全部本地通道 + 通道/设备的级联发布关系，并向上级推 DEL 移除目录节点")
     public AjaxResult deleteOne(@Parameter(description = "设备ID") @PathVariable(value = "id") Long id) {
-        return AjaxResult.success(deviceService.removeById(id));
+        return AjaxResult.success(deviceRemovalManager.removeById(id));
     }
 
     @DeleteMapping("/deleteIds")
-    @Operation(summary = "批量删除设备", description = "根据ID列表批量删除设备")
+    @Operation(summary = "批量删除设备",
+        description = "按 ID 列表批量级联删除（同一事务），返回实际删除的设备数")
     public AjaxResult deleteBatch(@RequestBody List<Long> ids) {
-        return AjaxResult.success(deviceService.removeBatchByIds(ids));
+        return AjaxResult.success(deviceRemovalManager.removeByIds(ids));
     }
 
     @GetMapping("/count")

@@ -42,6 +42,18 @@ public class DeviceChannelUpdateReq implements Serializable {
     private Integer status;
 
     /**
+     * 所属级联组织 {@code tb_cascade_org.id}。
+     *
+     * <p>三态：{@code null} 不改 / {@code 0} 清空（改为跟随设备归属）/ 其余按 id 归组织。
+     */
+    private Long    orgId;
+
+    /**
+     * 本地启用 1/0，{@code null} 不改。与在线状态无关：停用后从所有上级平台目录消失。
+     */
+    private Integer enabled;
+
+    /**
      * 扩展信息
      */
     private ExtendInfoReq extendInfo;

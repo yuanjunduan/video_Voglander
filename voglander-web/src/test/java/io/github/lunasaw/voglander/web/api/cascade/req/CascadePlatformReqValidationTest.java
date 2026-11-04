@@ -2,6 +2,7 @@ package io.github.lunasaw.voglander.web.api.cascade.req;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.Arrays;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -112,6 +113,114 @@ class CascadePlatformReqValidationTest {
         assertEquals("注册有效期范围 60-7200 秒", messages(req));
     }
 
+    /* ---------------- 平台编码规则（2.3） ---------------- */
+
+    @Test
+    @DisplayName("平台编码规则：省编码 3 位时拦截")
+    void create_code_province_width_invalid() {
+        CascadePlatformCreateReq req = validCreate();
+        req.setCodeProvince("340");
+        assertEquals("省编码必须为 2 位数字", messages(req));
+    }
+
+    @Test
+    @DisplayName("平台编码规则：县区编码 3 位时拦截")
+    void create_code_county_width_invalid() {
+        CascadePlatformCreateReq req = validCreate();
+        req.setCodeCounty("020");
+        assertEquals("县区编码必须为 4 位数字", messages(req));
+    }
+
+    @Test
+    @DisplayName("平台编码规则：网络标识 2 位时拦截")
+    void create_code_network_width_invalid() {
+        CascadePlatformCreateReq req = validCreate();
+        req.setCodeNetwork("00");
+        assertEquals("网络标识必须为 1 位数字", messages(req));
+    }
+
+    @Test
+    @DisplayName("平台编码规则：空串表示清空该段，不拦截")
+    void create_blank_segment_allowed() {
+        CascadePlatformCreateReq req = validCreate();
+        req.setCodeProvince("");
+        req.setCodeNetwork("");
+        assertTrue(violations(req).isEmpty(), "清空段位是合法操作，不能当成“填错”拦在接口层");
+    }
+
+    @Test
+    @DisplayName("平台编码规则：全空格段按未填处理，不被 @Pattern 判成位宽错误")
+    void create_blank_segment_with_spaces_normalized() {
+        CascadePlatformCreateReq req = validCreate();
+        req.setCodeProvince("  ");
+        req.setCodeNetwork(" ");
+        assertTrue(violations(req).isEmpty(), "空格与空串必须同一口径，否则 @Pattern 与 Manager 会给出相反的结论");
+        assertEquals("", req.getCodeProvince(), "空格归一为空串，由 Manager 统一 trimToNull 落 NULL");
+        assertEquals("", req.getCodeNetwork());
+    }
+
+    @Test
+    @DisplayName("平台编码规则：段位首尾空白自动去掉（\" 34 \" → 34）")
+    void create_segment_trimmed() {
+        CascadePlatformCreateReq req = validCreate();
+        req.setCodeProvince(" 34 ");
+        req.setCodeCounty(" 0000");
+        assertTrue(violations(req).isEmpty(), "从表格复制粘贴常带不可见空白，不能因此拦下来");
+        assertEquals("34", req.getCodeProvince());
+        assertEquals("0000", req.getCodeCounty());
+    }
+
+    @Test
+    @DisplayName("更新请求：空格段归一为空串而非 null（空串=清空，null=不改）")
+    void update_blank_segment_stays_empty_not_null() {
+        CascadePlatformUpdateReq req = new CascadePlatformUpdateReq();
+        req.setId(5L);
+        req.setCodeProvince("  ");
+        assertEquals("", req.getCodeProvince(), "trim 不能把「清空该段」降级成「没传」");
+        assertTrue(violations(req).isEmpty());
+    }
+
+    @Test
+    @DisplayName("平台编码规则：起始序号超过 999999 时拦截")
+    void create_code_start_seq_out_of_range() {
+        CascadePlatformCreateReq req = validCreate();
+        req.setCodeStartSeq(1_000_000);
+        assertEquals("起始序号范围 0-999999", messages(req));
+    }
+
+    @Test
+    @DisplayName("平台编码规则：开关只接受 0/1")
+    void create_code_rule_enabled_out_of_range() {
+        CascadePlatformCreateReq req = validCreate();
+        req.setCodeRuleEnabled(2);
+        assertEquals("平台编码规则开关只能为 0 或 1", messages(req));
+    }
+
+    @Test
+    @DisplayName("类型位只读：三个平台入参都不提供 codeType 字段")
+    void platform_req_should_not_expose_code_type() {
+        for (Class<?> type : new Class<?>[] {CascadePlatformCreateReq.class, CascadePlatformUpdateReq.class,
+            CascadePlatformCodeRuleReq.class}) {
+            assertFalse(Arrays.stream(type.getDeclaredFields()).anyMatch(f -> "codeType".equals(f.getName())),
+                type.getSimpleName() + " 不能有 codeType：类型位由对象类型决定（组织 215/216、设备 132、通道 131），"
+                    + "否则会配出“通道码以 216 开头”这类看不出错的串");
+        }
+    }
+
+    @Test
+    @DisplayName("规则保存请求：五段齐全且开关打开时无校验错误")
+    void code_rule_req_valid() {
+        assertTrue(violations(validCodeRule()).isEmpty());
+    }
+
+    @Test
+    @DisplayName("规则保存请求：行业编码非数字时拦截")
+    void code_rule_req_industry_not_digits() {
+        CascadePlatformCodeRuleReq req = validCodeRule();
+        req.setCodeIndustry("0A");
+        assertEquals("行业编码必须为 2 位数字", messages(req));
+    }
+
     /* ---------------- 更新 ---------------- */
 
     @Test
@@ -146,6 +255,20 @@ class CascadePlatformReqValidationTest {
         req.setPlatformIp("10.0.0.1");
         req.setPlatformPort(5060);
         req.setLocalClientId("34020000002000000002");
+        return req;
+    }
+
+    /** 合法规则：省 34 / 市 02 / 县 0000 / 行业 00 / 网络 0，启用 */
+    private static CascadePlatformCodeRuleReq validCodeRule() {
+        CascadePlatformCodeRuleReq req = new CascadePlatformCodeRuleReq();
+        req.setCodeProvince("34");
+        req.setCodeCity("02");
+        req.setCodeCounty("0000");
+        req.setCodeIndustry("00");
+        req.setCodeNetwork("0");
+        req.setCodeStartSeq(100);
+        req.setCodeRuleEnabled(1);
+        req.setPublishAncestors(0);
         return req;
     }
 

@@ -24,11 +24,11 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * 级联通道目录项元数据解析：合成上级真正会看到的厂商 / 型号 / 地址 / IP / 摄像机类型。
  *
- * <p><b>为什么不能只用级联表里的值</b>：这三类数据分散在三个地方，级联表只该保存"人工纠正"，
+ * <p><b>为什么不能只用发布表里的值</b>：这三类数据分散在三个地方，发布行只该保存"人工纠正"，
  * 其余应取实时真值，否则设备换了型号、换了 IP，上级目录还停在旧值上。
  *
  * <ol>
- *   <li><b>覆盖值</b>：{@code tb_cascade_channel.manufacturer/model/address/ip_address/ptz_type}，
+ *   <li><b>覆盖值</b>：{@code tb_cascade_publish.manufacturer/model/address/ip_address/ptz_type}，
  *       人工补录优先（RTSP 设备没有安装地址、老国标设备目录不带型号时唯一手段）</li>
  *   <li><b>设备通道 extend</b>：GB28181 通道的 {@code channelInfo} 是目录项 JSON，
  *       {@code manufacturer/model/address/ipAddress/ptzType} 一应俱全；发现类通道则是

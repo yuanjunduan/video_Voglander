@@ -110,7 +110,7 @@ public class Gb28181ProtocolHandlerSubscriptionTest {
     }
 
     @Test
-    @DisplayName("NotifyUpdate DEL → 删除通道")
+    @DisplayName("NotifyUpdate DEL → 跟随设备台账删通道（走被动入口，不等上级确认）")
     public void notifyUpdateDelDeletesChannel() {
         Map<String, Object> item = new HashMap<>();
         item.put("deviceId", "34020000001320000004");
@@ -120,7 +120,9 @@ public class Gb28181ProtocolHandlerSubscriptionTest {
 
         handler.handle(event("Response", "NotifyUpdate", payload));
 
-        verify(deviceChannelManager).deleteDeviceChannel(DEVICE_ID, "34020000001320000004");
+        /* 设备自己已经把通道从台账里删了，本端只是跟随清理；误用主动入口会在上级不可达时把通道卡住 */
+        verify(deviceChannelManager).deleteDeviceChannelUpstreamDeleted(DEVICE_ID, "34020000001320000004");
+        verify(deviceChannelManager, never()).deleteDeviceChannel(any(), any());
         verify(deviceChannelManager, never()).patchChannelStatus(any(), any(), any(), any(), any());
     }
 

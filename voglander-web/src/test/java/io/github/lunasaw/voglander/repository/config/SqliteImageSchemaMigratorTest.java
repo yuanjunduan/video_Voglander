@@ -47,14 +47,16 @@ class SqliteImageSchemaMigratorTest {
     }
 
     @Test
-    @DisplayName("旧 21 表 app.db 启动后迁移为通用任务加图像三表")
+    @DisplayName("旧库启动后迁移为通用任务加图像三表")
     void legacyDatabase_shouldUpgradeToImageSchema() throws Exception {
         prepareLegacyDatabase();
-        assertEquals(21, countBusinessTables());
+        /* 按基线算净值而不是硬编码总数：基线由 db/voglander-sqlite.sql 决定，
+           每次新增无关业务表都会让写死的数字失效 */
+        int baseline = countBusinessTables();
 
         newInitializer().initSchemaIfEmpty();
 
-        assertEquals(26, countBusinessTables());
+        assertEquals(baseline + 5, countBusinessTables(), "三张任务表 + 三张图像表，并移除 export 表：净值 +5");
         assertTrue(tableExists("tb_image_asset"));
         assertTrue(tableExists("tb_biz_task_execution"));
         assertTrue(indexExists("idx_image_collection_config_camera"));
@@ -65,12 +67,13 @@ class SqliteImageSchemaMigratorTest {
     @DisplayName("重复启动只登记一次 migration 且不改变 schema")
     void repeatedStartup_shouldBeIdempotent() throws Exception {
         prepareLegacyDatabase();
+        int baseline = countBusinessTables();
         SqliteSchemaInitializer initializer = newInitializer();
 
         initializer.initSchemaIfEmpty();
         initializer.initSchemaIfEmpty();
 
-        assertEquals(26, countBusinessTables());
+        assertEquals(baseline + 5, countBusinessTables());
         assertEquals(1, countMigrationHistory());
     }
 

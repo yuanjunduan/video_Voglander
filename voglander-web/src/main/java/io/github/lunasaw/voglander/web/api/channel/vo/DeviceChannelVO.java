@@ -53,6 +53,21 @@ public class DeviceChannelVO implements Serializable {
     private String name;
 
     /**
+     * 所属级联组织 {@code tb_cascade_org.id}，空 = 跟随设备归属
+     */
+    private Long              orgId;
+
+    /**
+     * 所属级联组织名称（Controller 批量回填）
+     */
+    private String            orgName;
+
+    /**
+     * 本地启用 1启用 / 0停用，与在线状态 {@code status} 无关
+     */
+    private Integer           enabled;
+
+    /**
      * 扩展字段
      */
     private String extend;
@@ -89,6 +104,8 @@ public class DeviceChannelVO implements Serializable {
         vo.setChannelId(dto.getChannelId());
         vo.setDeviceId(dto.getDeviceId());
         vo.setName(dto.getName());
+        vo.setOrgId(dto.getOrgId());
+        vo.setEnabled(dto.getEnabled());
         vo.setExtend(dto.getExtend());
 
         // 转换扩展信息

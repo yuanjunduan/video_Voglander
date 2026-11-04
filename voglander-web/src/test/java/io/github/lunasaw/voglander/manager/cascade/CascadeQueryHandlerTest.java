@@ -147,7 +147,7 @@ class CascadeQueryHandlerTest {
     @DisplayName("设备信息：自发送且补齐 DeviceName/Channel")
     void deviceInfo_selfSentWithChannel() {
         CascadePlatformDTO platform = stubPlatform();
-        when(cascadeChannelManager.listByPlatformId(PLATFORM_ID)).thenReturn(List.of(enabledChannel(), disabledChannel()));
+        when(cascadeChannelManager.listEnabledChannels(PLATFORM_ID)).thenReturn(List.of(enabledChannel()));
 
         assertNull(handler.onDeviceInfoQuery(PLATFORM_ID, query("3", PLATFORM_ID)));
 
@@ -157,7 +157,7 @@ class CascadeQueryHandlerTest {
         assertTrue(xml.contains("<DeviceName>" + DOMAIN_ID + "</DeviceName>"), "名称缺省回落平台编码: " + xml);
         assertTrue(xml.contains("<Result>OK</Result>"), xml);
         assertTrue(xml.contains("<Manufacturer>Voglander</Manufacturer>"), xml);
-        assertTrue(xml.contains("<Channel>1</Channel>"), "Channel 只算已启用通道: " + xml);
+        assertTrue(xml.contains("<Channel>1</Channel>"), "Channel 只算目录里会上报的通道: " + xml);
     }
 
     @Test
@@ -331,13 +331,6 @@ class CascadeQueryHandlerTest {
 
     private CascadeChannelDTO enabledChannel() {
         return channel();
-    }
-
-    private CascadeChannelDTO disabledChannel() {
-        CascadeChannelDTO ch = channel();
-        ch.setCascadeChannelId("34020000001320000008");
-        ch.setEnabled(0);
-        return ch;
     }
 
     private PresetQuery presetQuery(String sn) {

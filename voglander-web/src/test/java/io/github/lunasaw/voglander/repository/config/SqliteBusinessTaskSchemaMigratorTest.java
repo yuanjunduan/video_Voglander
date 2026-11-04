@@ -48,14 +48,16 @@ class SqliteBusinessTaskSchemaMigratorTest {
     }
 
     @Test
-    @DisplayName("旧 21 表数据库迁移为 23 表并移除空 export 表")
+    @DisplayName("旧库迁移只动任务相关表：新增三张、移除 export 表")
     void legacyDatabase_shouldUpgradeToTaskSchema() throws Exception {
         prepareLegacyDatabase(false);
-        assertEquals(21, countBusinessTables());
+        /* 按基线算净值而不是硬编码总数：基线由 db/voglander-sqlite.sql 决定，
+           每次新增无关业务表都会让写死的数字失效 */
+        int baseline = countBusinessTables();
 
         migrator().migrate();
 
-        assertEquals(23, countBusinessTables());
+        assertEquals(baseline + 2, countBusinessTables(), "+3 张任务表 -1 张 export 表");
         assertFalse(tableExists("tb_export_task"));
         assertTrue(tableExists("tb_biz_task"));
         assertTrue(tableExists("tb_biz_task_execution"));
@@ -68,12 +70,13 @@ class SqliteBusinessTaskSchemaMigratorTest {
     @DisplayName("重复启动只登记一次 migration 且不改变 schema")
     void repeatedStartup_shouldBeIdempotent() throws Exception {
         prepareLegacyDatabase(false);
+        int baseline = countBusinessTables();
         SqliteBusinessTaskSchemaMigrator migrator = migrator();
 
         migrator.migrate();
         migrator.migrate();
 
-        assertEquals(23, countBusinessTables());
+        assertEquals(baseline + 2, countBusinessTables());
         assertEquals(1, countMigrationHistory());
     }
 

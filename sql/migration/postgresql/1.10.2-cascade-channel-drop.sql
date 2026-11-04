@@ -1,0 +1,27 @@
+-- 1.10.2 级联通道老表退场：DROP TABLE tb_cascade_channel（contract 阶段）
+--
+-- 前置条件（缺一不可）：
+--   1) 已执行 1.10.2-cascade-channel-into-publish.sql，把存量翻译成 CHANNEL 发布行；
+--   2) 新版本已上线并确认上级目录与本平台页面一致（目录唯一来源已是 tb_cascade_publish）。
+--
+-- 为什么要单独一个脚本而不是并进上一步：
+--   搬迁与删表分开，搬迁失败只需重跑上一步，老表还在原地可核对；
+--   合在一起的话，一旦翻译有误就没有回头路。
+--
+-- 删表前必须自查：老表里凡是「本地通道已删」的孤儿行本就不会进发布层，
+-- 因此判据不是行数相等，而是下面这条查询返回 0 行——即不存在「本地通道还在、却没生成
+-- 对应发布行」的老配置：
+--
+-- SELECT ch.platform_id, ch.local_channel_id
+--   FROM tb_cascade_channel ch
+--   JOIN tb_device_channel c
+--     ON c.device_id = ch.local_device_id AND c.channel_id = ch.local_channel_id
+--  WHERE NOT EXISTS (SELECT 1 FROM tb_cascade_publish p
+--                     WHERE p.platform_id = ch.platform_id
+--                       AND p.object_type = 'CHANNEL'
+--                       AND p.object_key = ch.local_device_id || ':' || ch.local_channel_id);
+--
+-- 回滚：老表数据已 1:1 保存在 tb_cascade_publish（object_type='CHANNEL'）与
+--       tb_device_channel.org_id 中，需要恢复时按反向规则重建即可，不依赖本表的物理存在。
+
+DROP TABLE IF EXISTS tb_cascade_channel;

@@ -2,6 +2,8 @@ package io.github.lunasaw.voglander.web.api.cascade.req;
 
 import java.io.Serializable;
 
+import org.apache.commons.lang3.StringUtils;
+
 import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -112,4 +114,97 @@ public class CascadePlatformCreateReq implements Serializable {
      */
     @Pattern(regexp = "(?i)UDP|TCP", message = "传输协议仅支持 UDP 或 TCP")
     private String  transport;
+
+    /**
+     * 目录是否带设备层：0=虚拟组织（通道直挂组织，默认），1=域/组织/设备/通道。
+     */
+    @Min(value = 0, message = "设备层开关只能为 0 或 1")
+    @Max(value = 1, message = "设备层开关只能为 0 或 1")
+    private Integer catalogWithDeviceLayer;
+
+    /* ---------------- 平台编码规则（前 14 位里可配的五段；类型位由对象类型决定，不接受平台填写） ---------------- */
+
+    /**
+     * 省编码（2 位数字）；留空表示不用平台规则，编码回落组织规则与全局配置
+     */
+    @Pattern(regexp = CascadeConstant.CODE_SEG_2_REGEX, message = "省编码必须为 2 位数字")
+    private String  codeProvince;
+
+    /**
+     * 市编码（2 位数字）
+     */
+    @Pattern(regexp = CascadeConstant.CODE_SEG_2_REGEX, message = "市编码必须为 2 位数字")
+    private String  codeCity;
+
+    /**
+     * 县区编码（4 位数字）
+     */
+    @Pattern(regexp = CascadeConstant.CODE_SEG_4_REGEX, message = "县区编码必须为 4 位数字")
+    private String  codeCounty;
+
+    /**
+     * 行业编码（2 位数字）
+     */
+    @Pattern(regexp = CascadeConstant.CODE_SEG_2_REGEX, message = "行业编码必须为 2 位数字")
+    private String  codeIndustry;
+
+    /**
+     * 网络标识（1 位数字）
+     */
+    @Pattern(regexp = CascadeConstant.CODE_SEG_1_REGEX, message = "网络标识必须为 1 位数字")
+    private String  codeNetwork;
+
+    /**
+     * 起始序号（6 位，只作发号下界，不会把已用号码降回去）
+     */
+    @Min(value = 0, message = "起始序号范围 0-999999")
+    @Max(value = 999999, message = "起始序号范围 0-999999")
+    private Integer codeStartSeq;
+
+    /**
+     * 平台编码规则开关：0=不启用（默认，编码沿用组织规则与全局配置） 1=按平台规则生成上报编码。
+     *
+     * <p>默认关闭是兼容红线：升级若替存量平台换码，上级会把所有老对象当成新设备。
+     */
+    @Min(value = 0, message = "平台编码规则开关只能为 0 或 1")
+    @Max(value = 1, message = "平台编码规则开关只能为 0 或 1")
+    private Integer codeRuleEnabled;
+
+    /**
+     * 发布策略：0=勾选组织时缺祖先即报错（默认） 1=自动补推缺失的祖先链。
+     *
+     * <p>默认关闭：自动补推会一次性放出整条祖先链，只能由用户显式选择。
+     */
+    @Min(value = 0, message = "父链补推开关只能为 0 或 1")
+    @Max(value = 1, message = "父链补推开关只能为 0 或 1")
+    private Integer publishAncestors;
+
+    /* ---------------- 段位空白归一 ---------------- */
+
+    /**
+     * 段位在入口统一 trim：粘贴进来的 "  " 按「未填」处理，与 Manager 的 {@code trimToNull} 同一口径。
+     *
+     * <p>不在这里 trim 的话，{@code @Pattern} 会把 "  " 判成「必须为 2 位数字」，
+     * 而 Manager 又把它当空——同一份输入两层给出相反的结论。
+     * 只 trim 不 trimToNull：空串在更新语义里表示「清空该段」，必须与「没传」区分。
+     */
+    public void setCodeProvince(String codeProvince) {
+        this.codeProvince = StringUtils.trim(codeProvince);
+    }
+
+    public void setCodeCity(String codeCity) {
+        this.codeCity = StringUtils.trim(codeCity);
+    }
+
+    public void setCodeCounty(String codeCounty) {
+        this.codeCounty = StringUtils.trim(codeCounty);
+    }
+
+    public void setCodeIndustry(String codeIndustry) {
+        this.codeIndustry = StringUtils.trim(codeIndustry);
+    }
+
+    public void setCodeNetwork(String codeNetwork) {
+        this.codeNetwork = StringUtils.trim(codeNetwork);
+    }
 }

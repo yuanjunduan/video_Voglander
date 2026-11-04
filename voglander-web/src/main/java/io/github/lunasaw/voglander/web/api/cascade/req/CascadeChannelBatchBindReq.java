@@ -10,7 +10,7 @@ import lombok.Data;
  *
  * <p>
  * 从本地设备批量生成级联通道映射：同一上级平台下绑定多个本地通道，
- * cascadeChannelId 缺省时取 localChannelId（透传编码）。
+ * cascadeChannelId 缺省时由编码规则派生（规则未启用时等价于 localChannelId）。
  * </p>
  *
  * @author luna
@@ -58,7 +58,7 @@ public class CascadeChannelBatchBindReq implements Serializable {
         private String localChannelId;
 
         /**
-         * 对上级暴露的级联编码（缺省=localChannelId）
+         * 对上级暴露的级联编码（缺省 = 按编码规则派生，当前等价于 localChannelId）
          */
         private String cascadeChannelId;
 

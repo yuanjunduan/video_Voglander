@@ -19,6 +19,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 
 import io.github.lunasaw.voglander.manager.domaon.dto.DeviceDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.DeviceQueryDTO;
+import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
 import io.github.lunasaw.voglander.manager.manager.DeviceChannelManager;
 import io.github.lunasaw.voglander.manager.manager.DeviceManager;
 import io.github.lunasaw.voglander.manager.manager.DeviceSubscriptionManager;
@@ -47,6 +48,8 @@ class DeviceControllerGetPageTest {
     DeviceWebAssembler        deviceWebAssembler;
     @Mock
     DeviceSubscriptionManager deviceSubscriptionManager;
+    @Mock
+    CascadeOrgManager         cascadeOrgManager;
 
     MockMvc                   mvc;
 
@@ -62,6 +65,8 @@ class DeviceControllerGetPageTest {
         dto.setDeviceId("34020000001320000001");
         dto.setStatus(1);
         dto.setType(1);
+        /* 组织名称不进库、由列表回填，这里钉住「只出 orgId 时会补上名称」 */
+        dto.setOrgId(9L);
 
         Page<DeviceDTO> page = new Page<>(1, 10);
         page.setRecords(java.util.List.of(dto));
@@ -71,6 +76,7 @@ class DeviceControllerGetPageTest {
         when(deviceManager.getPage(any(DeviceQueryDTO.class), anyInt(), anyInt())).thenReturn(page);
         when(deviceChannelManager.countByDeviceId("34020000001320000001")).thenReturn(3L);
         when(deviceSubscriptionManager.listByDeviceIds(anyList())).thenReturn(java.util.Collections.emptyList());
+        when(cascadeOrgManager.nameIndexById()).thenReturn(java.util.Map.of(9L, "一号组织"));
 
         mvc.perform(post("/api/v1/device/getPage")
             .param("page", "1").param("size", "10")
@@ -80,6 +86,8 @@ class DeviceControllerGetPageTest {
             .andExpect(jsonPath("$.data.total").value(1))
             .andExpect(jsonPath("$.data.items[0].deviceId").value("34020000001320000001"))
             .andExpect(jsonPath("$.data.items[0].channelCount").value(3))
+            .andExpect(jsonPath("$.data.items[0].orgId").value(9))
+            .andExpect(jsonPath("$.data.items[0].orgName").value("一号组织"))
             .andExpect(jsonPath("$.data.items[0].statusName").value("在线"));
 
         verify(deviceChannelManager).countByDeviceId("34020000001320000001");

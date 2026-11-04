@@ -64,6 +64,16 @@ public class DeviceCreateReq implements Serializable {
     private Integer status;
 
     /**
+     * 所属级联组织 {@code tb_cascade_org.id}，null 或 0 表示未归组织（上报时挂域节点）。
+     */
+    private Long              orgId;
+
+    /**
+     * 本地启用 1/0，null 走库默认（启用）。与在线状态 {@code status} 无关。
+     */
+    private Integer           enabled;
+
+    /**
      * 扩展信息
      */
     private ExtendInfoReq extendInfo;

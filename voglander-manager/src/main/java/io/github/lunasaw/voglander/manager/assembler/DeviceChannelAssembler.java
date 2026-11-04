@@ -37,9 +37,16 @@ public class DeviceChannelAssembler {
         deviceChannelDO.setChannelId(dto.getChannelId());
         deviceChannelDO.setDeviceId(dto.getDeviceId());
         deviceChannelDO.setName(dto.getName());
+        /* 归属与本地启停只有人工操作才会带上：目录同步来的 DTO 两者都是 null，
+           而 updateBatchById 会跳过 null 列，用户配的组织与开关不会被同步流程冲掉 */
+        deviceChannelDO.setOrgId(dto.getOrgId());
+        deviceChannelDO.setEnabled(dto.getEnabled());
         deviceChannelDO.setLastSeenTime(dto.getLastSeenTime());
         deviceChannelDO.setStatusSource(dto.getStatusSource());
         deviceChannelDO.setMissingCount(dto.getMissingCount());
+        /* 通道自己的码只由人工/编码规则写：目录同步来的 DTO 是 null，updateBatchById 跳过 null 列，
+           已固化的码不会被同步流程冲掉 */
+        deviceChannelDO.setCode(dto.getCode());
 
         // 扩展字段转换
         if (dto.getExtendInfo() != null) {
@@ -67,10 +74,13 @@ public class DeviceChannelAssembler {
         dto.setChannelId(deviceChannelDO.getChannelId());
         dto.setDeviceId(deviceChannelDO.getDeviceId());
         dto.setName(deviceChannelDO.getName());
+        dto.setOrgId(deviceChannelDO.getOrgId());
+        dto.setEnabled(deviceChannelDO.getEnabled());
         dto.setExtend(deviceChannelDO.getExtend());
         dto.setLastSeenTime(deviceChannelDO.getLastSeenTime());
         dto.setStatusSource(deviceChannelDO.getStatusSource());
         dto.setMissingCount(deviceChannelDO.getMissingCount());
+        dto.setCode(deviceChannelDO.getCode());
 
         // 扩展字段解析
         dto.setExtendInfo(parseExtendInfo(deviceChannelDO.getExtend()));

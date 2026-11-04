@@ -43,6 +43,22 @@ public class DeviceChannelDTO {
      * 通道名称
      */
     private String name;
+
+    /**
+     * 所属级联组织（{@code tb_cascade_org.id}）。
+     *
+     * <p><b>三态语义</b>：{@code null} 不改；{@code 0} 清空（落库为 null，改为跟随设备归属）；
+     * 其余按 id 归组织。用 0 是因为通道同步来自设备目录、会把 DTO 重建一遍，
+     * 没有“清空”这个显式值就永远无法把通道从组织里移走（{@code updateById} 跳过 null 列）。
+     */
+    private Long   orgId;
+
+    /**
+     * 本地启用 1/0，{@code null} = 不改。与在线状态 {@code status} 无关：
+     * {@code status} 只影响报文里的 Status，{@code enabled=0} 才让通道从所有上级平台消失。
+     */
+    private Integer enabled;
+
     /**
      * 扩展字段
      */
@@ -66,6 +82,14 @@ public class DeviceChannelDTO {
      */
     private Integer missingCount;
 
+    /**
+     * 通道「自己的码」（1.10.3）；{@code null} = 不改，空串 = 清空（落库为 null，回落到通道 Id）。
+     *
+     * <p>与 {@code orgId} 同一约定：通道同步来自设备目录、会把 DTO 重建一遍，
+     * 而 {@code updateById} 跳过 null 列，没有显式值就永远写不进去。
+     */
+    private String  code;
+
     /** @deprecated 改用 {@link io.github.lunasaw.voglander.manager.assembler.DeviceChannelAssembler#doToDto} */
     @Deprecated
     public static DeviceChannelDTO convertDTO(DeviceChannelDO deviceChannelDO) {
@@ -80,11 +104,14 @@ public class DeviceChannelDTO {
         dto.setChannelId(deviceChannelDO.getChannelId());
         dto.setDeviceId(deviceChannelDO.getDeviceId());
         dto.setName(deviceChannelDO.getName());
+        dto.setOrgId(deviceChannelDO.getOrgId());
+        dto.setEnabled(deviceChannelDO.getEnabled());
         dto.setExtend(deviceChannelDO.getExtend());
         dto.setExtendInfo(getExtendObj(deviceChannelDO.getExtend()));
         dto.setLastSeenTime(deviceChannelDO.getLastSeenTime());
         dto.setStatusSource(deviceChannelDO.getStatusSource());
         dto.setMissingCount(deviceChannelDO.getMissingCount());
+        dto.setCode(deviceChannelDO.getCode());
         return dto;
     }
 
@@ -102,7 +129,9 @@ public class DeviceChannelDTO {
         deviceChannelDO.setChannelId(dto.getChannelId());
         deviceChannelDO.setDeviceId(dto.getDeviceId());
         deviceChannelDO.setName(dto.getName());
-        // extendInfo 为空时不能序列化：JSON.toJSONString(null) 会得到字符串 "null"，
+        deviceChannelDO.setOrgId(dto.getOrgId());
+        deviceChannelDO.setEnabled(dto.getEnabled());
+        // extendInfo 为空时不能序列化：JSON.toJSONString(null) 会得到字符串 "null",
         // 由 updateById 落库后就把库里的通道地址/编码/分辨率整串冲掉
         if (dto.getExtendInfo() != null) {
             deviceChannelDO.setExtend(JSON.toJSONString(dto.getExtendInfo()));
@@ -112,6 +141,7 @@ public class DeviceChannelDTO {
         deviceChannelDO.setLastSeenTime(dto.getLastSeenTime());
         deviceChannelDO.setStatusSource(dto.getStatusSource());
         deviceChannelDO.setMissingCount(dto.getMissingCount());
+        deviceChannelDO.setCode(dto.getCode());
         return deviceChannelDO;
     }
 

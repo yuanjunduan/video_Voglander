@@ -31,7 +31,9 @@ public class CascadeChannelCreateReq implements Serializable {
     private String localChannelId;
 
     /**
-     * 对上级暴露的级联通道编码（国标 20 位，必填）
+     * 对上级暴露的级联通道编码（国标 20 位，选填）。
+     *
+     * <p>留空时由编码规则派生，规则未启用时等价于本地通道编码。
      */
     private String cascadeChannelId;
 

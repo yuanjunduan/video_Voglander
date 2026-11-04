@@ -305,14 +305,12 @@ public class CascadeQueryHandler implements QueryListener {
         return platform == null ? null : platform.getLocalClientId();
     }
 
-    /** 视频输入通道数（§9.5.3.2 的 Channel）：按已启用级联通道计数。 */
+    /** 视频输入通道数（§9.5.3.2 的 Channel）：取该平台目录里真会上报的通道数。 */
     private int countEnabledChannels(String platformId) {
         try {
-            List<CascadeChannelDTO> channels = cascadeChannelManager.listByPlatformId(platformId);
-            if (channels == null) {
-                return 0;
-            }
-            return (int) channels.stream().filter(c -> c.getEnabled() != null && c.getEnabled() == 1).count();
+            /* 目录视图本身已过滤发布停用与本地停用，直接计数即可 */
+            List<CascadeChannelDTO> channels = cascadeChannelManager.listEnabledChannels(platformId);
+            return channels == null ? 0 : channels.size();
         } catch (Exception e) {
             log.warn("统计级联通道数失败: platformId={}, err={}", platformId, e.getMessage());
             return 0;

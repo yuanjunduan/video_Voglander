@@ -25,6 +25,7 @@ import org.springframework.cache.CacheManager;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -40,7 +41,7 @@ import java.util.stream.Collectors;
  * </p>
  * <ul>
  * <li>统一修改入口：{@link #deviceChannelInternal(DeviceChannelDO, String)} - 所有修改操作的核心方法</li>
- * <li>统一删除入口：{@link #deleteDeviceChannelInternal(Long, String)} - 所有删除操作的核心方法</li>
+ * <li>统一删除入口：{@link #deleteDeviceChannelInternal(Long, String, boolean)} - 所有删除操作的核心方法</li>
  * <li>统一缓存管理：{@link #clearDeviceChannelCache(String, String, Long)} - 统一的缓存清理逻辑</li>
  * </ul>
  *
@@ -85,6 +86,19 @@ public class DeviceChannelManager {
     @Autowired
     private DeviceChannelAssembler deviceChannelAssembler;
 
+    /**
+     * 发布层撤销与清理：通道被删后，各平台的推送配置与被推上去的目录节点必须一起消失
+     */
+    @Autowired
+    private CascadeAssetCleanup cascadeAssetCleanup;
+
+    /**
+     * 手动开事务：向上级取消上报要同步等回应（最长 10s），不能包在事务里占住数据库连接，
+     * 因此删除流程被拆成「事务外撤销 + 事务内删本地」两段，由这里显式控制事务边界。
+     */
+    @Autowired
+    private TransactionTemplate  transactionTemplate;
+
     @Autowired
     private RedisCache             redisCache;
 
@@ -113,13 +127,15 @@ public class DeviceChannelManager {
     private boolean enableSessionPromotion;
 
     /**
-     * 删除设备通道
+     * 删除设备通道（用户主动删除）：先向上级取消上报并拿到确认，才删本地记录
+     *
+     * <p>没确认就抛 {@link IllegalArgumentException}，本地一条不动；否则上级目录里会留下
+     * 一个本地已不存在的节点，还能对着它发起点播。
      *
      * @param deviceId 设备ID
      * @param channelId 通道ID
      * @return 是否删除成功
      */
-    @Transactional(rollbackFor = Exception.class)
     public Boolean deleteDeviceChannel(String deviceId, String channelId) {
         Assert.hasText(deviceId, "设备ID不能为空");
         Assert.hasText(channelId, "通道ID不能为空");
@@ -129,8 +145,34 @@ public class DeviceChannelManager {
             throw new ServiceException("设备通道不存在，设备ID: " + deviceId + ", 通道ID: " + channelId);
         }
 
+        // 事务外先撤销（发布行也一并清掉），再开事务删本地
+        cascadeAssetCleanup.revokeChannel(deviceChannelDO.getDeviceId(), deviceChannelDO.getChannelId());
+        return transactionTemplate.execute(
+            status -> deleteDeviceChannelInternal(deviceChannelDO.getId(), "删除设备通道", false));
+    }
+
+    /**
+     * 跟随设备上报的 Catalog {@code DEL} 删通道：不阻本地流程，只异步告知上级发布层同步清理。
+     *
+     * <p>与 {@link #deleteDeviceChannel} 的差别在于“谁发起”：设备自己已经把通道从台账里删了，
+     * 本端跟随清理时再去等上级确认没有意义，也会让通道永远删不掉。
+     *
+     * @param deviceId 设备ID
+     * @param channelId 通道ID
+     * @return 是否删除成功
+     */
+    public Boolean deleteDeviceChannelUpstreamDeleted(String deviceId, String channelId) {
+        Assert.hasText(deviceId, "设备ID不能为空");
+        Assert.hasText(channelId, "通道ID不能为空");
+
+        DeviceChannelDO deviceChannelDO = getByDeviceId(deviceId, channelId);
+        if (deviceChannelDO == null) {
+            throw new ServiceException("设备通道不存在，设备ID: " + deviceId + ", 通道ID: " + channelId);
+        }
+
         // 调用统一删除入口方法
-        return deleteDeviceChannelInternal(deviceChannelDO.getId(), "删除设备通道");
+        return transactionTemplate.execute(
+            status -> deleteDeviceChannelInternal(deviceChannelDO.getId(), "删除设备通道", true));
     }
 
     public DeviceChannelDO getByDeviceId(String deviceId, String channelId) {
@@ -139,6 +181,24 @@ public class DeviceChannelManager {
         QueryWrapper<DeviceChannelDO> queryWrapper = new QueryWrapper<DeviceChannelDO>().eq("device_id", deviceId)
                 .eq("channel_id", channelId).last("limit 1");
         return deviceChannelService.getOne(queryWrapper);
+    }
+
+    /**
+     * 按通道国标 ID 反查所属设备。
+     *
+     * <p>级联发布行只存 {@code deviceId:channelId}，而页面与推送通知常常只给通道编码；
+     * 国标通道 ID 全局唯一，一次索引查询就能补齐设备段。
+     *
+     * @param channelId 通道国标 ID
+     * @return 通道行；不存在返回 null
+     */
+    public DeviceChannelDO getByChannelId(String channelId) {
+        if (channelId == null || channelId.isEmpty()) {
+            return null;
+        }
+        LambdaQueryWrapper<DeviceChannelDO> qw = new LambdaQueryWrapper<>();
+        qw.eq(DeviceChannelDO::getChannelId, channelId).last("limit 1");
+        return deviceChannelService.getOne(qw);
     }
 
     public DeviceChannelDTO getDtoByDeviceId(String deviceId, String channelId) {
@@ -195,6 +255,67 @@ public class DeviceChannelManager {
     }
 
     /**
+     * 统计直接归属到某组织的通道数（不含通过设备继承归属的通道）。
+     *
+     * <p>删除组织前用它做占用校验：通道自带 {@code org_id} 是为了表达
+     * "设备在 A 组织、某路通道归 B 业务分组"，因此这里只数显式归属。
+     *
+     * @param orgId 组织主键
+     * @return 直接归属的通道数
+     */
+    public long countByOrgId(Long orgId) {
+        if (orgId == null) {
+            return 0L;
+        }
+        LambdaQueryWrapper<DeviceChannelDO> qw = new LambdaQueryWrapper<>();
+        qw.eq(DeviceChannelDO::getOrgId, orgId);
+        return deviceChannelService.count(qw);
+    }
+
+    /**
+     * 列出直接归属到某组织的通道（组装器与通道页共用）。
+     *
+     * @param orgId 组织主键
+     * @return 通道 DO 列表；orgId 为空返回空列表
+     */
+    public List<DeviceChannelDO> listByOrgId(Long orgId) {
+        if (orgId == null) {
+            return Collections.emptyList();
+        }
+        LambdaQueryWrapper<DeviceChannelDO> qw = new LambdaQueryWrapper<>();
+        qw.eq(DeviceChannelDO::getOrgId, orgId);
+        return deviceChannelService.list(qw);
+    }
+
+    /**
+     * 通道 → 组织归属的轻量投影（只取 {@code device_id} / {@code org_id}）。
+     *
+     * <p>刻意全表扫：组织树统计通道数要同时覆盖"通道显式归属组织"与"通道跟随设备归属"，
+     * 只取 {@code org_id} 非空的通道会漏掉后者。
+     */
+    public List<DeviceChannelDO> listOrgLinkProjection() {
+        LambdaQueryWrapper<DeviceChannelDO> qw = new LambdaQueryWrapper<>();
+        qw.select(DeviceChannelDO::getDeviceId, DeviceChannelDO::getOrgId);
+        return deviceChannelService.list(qw);
+    }
+
+    /**
+     * 统计给定设备下"未显式归属组织"的通道数（这些通道跟随设备归属）。
+     *
+     * @param deviceIds 设备国标 ID 集合
+     * @return 通道数；集合为空返回 0
+     */
+    public long countUnownedByDeviceIds(Collection<String> deviceIds) {
+        if (deviceIds == null || deviceIds.isEmpty()) {
+            return 0L;
+        }
+        LambdaQueryWrapper<DeviceChannelDO> qw = new LambdaQueryWrapper<>();
+        qw.in(DeviceChannelDO::getDeviceId, deviceIds)
+            .isNull(DeviceChannelDO::getOrgId);
+        return deviceChannelService.count(qw);
+    }
+
+    /**
      * 批量取通道在线状态：按设备集合一次查出，避免目录应答时逐通道回表（N+1）。
      *
      * <p>级联目录应答里每个通道都要带 ON/OFF，一次查询可能涉及上百通道；
@@ -223,6 +344,24 @@ public class DeviceChannelManager {
      */
     public static String channelKey(String deviceId, String channelId) {
         return deviceId + "#" + channelId;
+    }
+
+    /**
+     * 按设备集合一次取回通道行（含名称/组织/启停/状态）。
+     *
+     * <p>供发布层组装目录时用：发布行只存业务键，节点名称、本地归属与本地启停都在这里，
+     * 逐通道回表会让百路目录变成百次查询。
+     *
+     * @param deviceIds 设备国标 ID 集合
+     * @return 通道行；集合为空返回空列表
+     */
+    public List<DeviceChannelDO> listByDeviceIds(Collection<String> deviceIds) {
+        if (deviceIds == null || deviceIds.isEmpty()) {
+            return new ArrayList<>();
+        }
+        LambdaQueryWrapper<DeviceChannelDO> qw = new LambdaQueryWrapper<>();
+        qw.in(DeviceChannelDO::getDeviceId, deviceIds);
+        return deviceChannelService.list(qw);
     }
 
     /**
@@ -462,9 +601,11 @@ public class DeviceChannelManager {
      *
      * @param deviceChannelId 设备通道数据库ID
      * @param operationType 操作类型描述
+     * @param notifyUpstream 是否走“删完再异步通知上级”的被动链路；{@code false} 表示发布层已由
+     *                       调用方同步撤销并确认，这里不能再发一次 {@code DEL}
      * @return 是否删除成功
      */
-    private boolean deleteDeviceChannelInternal(Long deviceChannelId, String operationType) {
+    private boolean deleteDeviceChannelInternal(Long deviceChannelId, String operationType, boolean notifyUpstream) {
         Assert.notNull(deviceChannelId, "设备通道ID不能为空");
         Assert.hasText(operationType, "操作类型不能为空");
 
@@ -486,6 +627,11 @@ public class DeviceChannelManager {
             if (result) {
                 // 清理相关缓存
                 clearDeviceChannelCache(existingChannel.getDeviceId(), existingChannel.getChannelId(), deviceChannelId);
+
+                /* 被动链路：本地通道没了，发布行与被推上去的目录节点都是孤儿；不显式 DEL，上级会永久留着那个节点 */
+                if (notifyUpstream) {
+                    cascadeAssetCleanup.purgeChannel(existingChannel.getDeviceId(), existingChannel.getChannelId());
+                }
 
                 log.info("{}成功，设备ID：{}，通道ID：{}，数据库ID：{}", operationType,
                     existingChannel.getDeviceId(), existingChannel.getChannelId(), deviceChannelId);
@@ -655,10 +801,13 @@ public class DeviceChannelManager {
         Assert.notNull(deviceChannelDTO, "设备通道信息不能为空");
         Assert.hasText(deviceChannelDTO.getDeviceId(), "设备ID不能为空");
         Assert.hasText(deviceChannelDTO.getChannelId(), "通道ID不能为空");
+        assertEnabledValid(deviceChannelDTO.getEnabled());
 
         try {
             // 转为DO
             DeviceChannelDO deviceChannelDO = deviceChannelAssembler.dtoToDo(deviceChannelDTO);
+            // 新增时 0 与 null 等价：组织主键从 1 开始，0 永远不是合法组织
+            deviceChannelDO.setOrgId(normalizeOrgId(deviceChannelDTO.getOrgId()));
             deviceChannelDO.setCreateTime(LocalDateTime.now());
             deviceChannelDO.setUpdateTime(LocalDateTime.now());
 
@@ -698,8 +847,11 @@ public class DeviceChannelManager {
                 .eq(queryDO.getDeviceId() != null, DeviceChannelDO::getDeviceId, queryDO.getDeviceId())
                 .eq(queryDO.getChannelId() != null, DeviceChannelDO::getChannelId, queryDO.getChannelId())
                 .eq(queryDO.getStatus() != null, DeviceChannelDO::getStatus, queryDO.getStatus())
-                .like(queryDO.getName() != null, DeviceChannelDO::getName, queryDO.getName())
-                .last("limit 1");
+                .eq(queryDO.getEnabled() != null, DeviceChannelDO::getEnabled, queryDO.getEnabled())
+                .like(queryDO.getName() != null, DeviceChannelDO::getName, queryDO.getName());
+
+            appendOrgIdCondition(queryWrapper, queryDO.getOrgId());
+            queryWrapper.last("limit 1");
 
             DeviceChannelDO existingRecord = deviceChannelService.getOne(queryWrapper);
             if (existingRecord == null) {
@@ -713,9 +865,20 @@ public class DeviceChannelManager {
             updateDO.setId(existingRecord.getId());
             updateDO.setUpdateTime(LocalDateTime.now());
 
+            assertEnabledValid(updateDTO.getEnabled());
+            // org_id 用 0 表示"清空归属"（落库为 null，改为跟随设备归属）：updateById 跳过 null 列、
+            // 无法把"有值"改回"无值"，故先把 0 从实体里摘掉，更新成功后再补一条 SET org_id = NULL
+            boolean clearOrgId = updateDTO.getOrgId() != null && updateDTO.getOrgId() == 0L;
+            if (clearOrgId) {
+                updateDO.setOrgId(null);
+            }
+
             boolean success = deviceChannelService.updateById(updateDO);
             if (!success) {
                 throw new ServiceException(ServiceExceptionEnum.CHANNEL_OPERATION_FAILED, "数据库更新失败");
+            }
+            if (clearOrgId) {
+                resetOrgId(existingRecord.getId());
             }
 
             String newKey = buildDeviceChannelKey(updateDO.getDeviceId(), updateDO.getChannelId());
@@ -760,8 +923,11 @@ public class DeviceChannelManager {
                 .eq(deviceChannelDO.getDeviceId() != null, DeviceChannelDO::getDeviceId, deviceChannelDO.getDeviceId())
                 .eq(deviceChannelDO.getChannelId() != null, DeviceChannelDO::getChannelId, deviceChannelDO.getChannelId())
                 .eq(deviceChannelDO.getStatus() != null, DeviceChannelDO::getStatus, deviceChannelDO.getStatus())
-                .like(deviceChannelDO.getName() != null, DeviceChannelDO::getName, deviceChannelDO.getName())
-                .last("limit 1");
+                .eq(deviceChannelDO.getEnabled() != null, DeviceChannelDO::getEnabled, deviceChannelDO.getEnabled())
+                .like(deviceChannelDO.getName() != null, DeviceChannelDO::getName, deviceChannelDO.getName());
+
+            appendOrgIdCondition(queryWrapper, deviceChannelDO.getOrgId());
+            queryWrapper.last("limit 1");
 
             DeviceChannelDO existingRecord = deviceChannelService.getOne(queryWrapper);
             if (existingRecord == null) {
@@ -777,10 +943,9 @@ public class DeviceChannelManager {
 
     /**
      * 模板方法：删除单条记录
-     * 标准流程：校验参数 -> 通过条件查找 -> 删除数据库记录 -> 清理缓存
+     * 标准流程：校验参数 -> 通过条件查找 -> 向上级取消上报并确认 -> 删除数据库记录 -> 清理缓存
      * 删除实现：使用LambdaQueryWrapper构建查询条件
      */
-    @Transactional(rollbackFor = Exception.class)
     public Boolean deleteOne(DeviceChannelDTO deviceChannelDTO) {
         Assert.notNull(deviceChannelDTO, "删除条件不能为空");
 
@@ -802,14 +967,21 @@ public class DeviceChannelManager {
 
             String oldKey = buildDeviceChannelKey(existingRecord.getDeviceId(), existingRecord.getChannelId());
 
-            boolean success = deviceChannelService.removeById(existingRecord.getId());
-            if (success) {
+            /* 先取消上报再删本地，且放在事务外：未获确认直接抛出，本地一条都不动 */
+            cascadeAssetCleanup.revokeChannel(existingRecord.getDeviceId(), existingRecord.getChannelId());
+
+            return transactionTemplate.execute(status -> {
+                boolean success = deviceChannelService.removeById(existingRecord.getId());
+                if (!success) {
+                    throw new ServiceException(ServiceExceptionEnum.CHANNEL_OPERATION_FAILED, "数据库删除失败");
+                }
                 clearCache(existingRecord.getId(), oldKey, null);
                 return true;
-            } else {
-                throw new ServiceException(ServiceExceptionEnum.CHANNEL_OPERATION_FAILED, "数据库删除失败");
-            }
+            });
         } catch (ServiceException e) {
+            throw e;
+        } catch (IllegalArgumentException e) {
+            /* 撤销未确认的原因必须原样透到调用方，洗成通用失败后用户不知道该先去哪个平台处理 */
             throw e;
         } catch (Exception e) {
             log.error("删除设备通道失败 - 错误: {}", e.getMessage(), e);
@@ -819,10 +991,9 @@ public class DeviceChannelManager {
 
     /**
      * 模板方法：批量删除记录
-     * 标准流程：校验参数 -> 转换DO条件 -> 查询匹配记录 -> 批量删除 -> 清理缓存
+     * 标准流程：校验参数 -> 转换DO条件 -> 查询匹配记录 -> 向上级取消上报并确认 -> 批量删除 -> 清理缓存
      * 批量实现：使用LambdaQueryWrapper构建批量删除条件
      */
-    @Transactional(rollbackFor = Exception.class)
     public Boolean deleteBatch(DeviceChannelDTO deviceChannelDTO) {
         Assert.notNull(deviceChannelDTO, "删除条件不能为空");
 
@@ -841,23 +1012,44 @@ public class DeviceChannelManager {
                 return true;
             }
 
-            boolean success = deviceChannelService.remove(queryWrapper);
-            if (success) {
+            /* 先取消上报：任一平台未确认就抛出，本地通道与发布行都保持原样 */
+            revokePublishRows(recordsToDelete);
+
+            return transactionTemplate.execute(status -> {
+                boolean success = deviceChannelService.remove(queryWrapper);
+                if (!success) {
+                    throw new ServiceException(ServiceExceptionEnum.CHANNEL_OPERATION_FAILED, "数据库批量删除失败");
+                }
                 // 清理所有相关缓存
                 for (DeviceChannelDO record : recordsToDelete) {
                     String key = buildDeviceChannelKey(record.getDeviceId(), record.getChannelId());
                     clearCache(record.getId(), key, null);
                 }
                 return true;
-            } else {
-                throw new ServiceException(ServiceExceptionEnum.CHANNEL_OPERATION_FAILED, "数据库批量删除失败");
-            }
+            });
         } catch (ServiceException e) {
+            throw e;
+        } catch (IllegalArgumentException e) {
             throw e;
         } catch (Exception e) {
             log.error("批量删除设备通道失败 - 错误: {}", e.getMessage(), e);
             throw new ServiceException(ServiceExceptionEnum.CHANNEL_OPERATION_FAILED, e.getMessage());
         }
+    }
+
+    /**
+     * 批量删除前的发布层撤销：按设备分组一次查完，避免逐通道回表。
+     */
+    private void revokePublishRows(List<DeviceChannelDO> channels) {
+        Map<String, List<String>> channelIdsByDevice = new LinkedHashMap<>();
+        for (DeviceChannelDO channel : channels) {
+            if (StringUtils.isBlank(channel.getDeviceId()) || StringUtils.isBlank(channel.getChannelId())) {
+                continue;
+            }
+            channelIdsByDevice.computeIfAbsent(channel.getDeviceId(), key -> new ArrayList<>())
+                .add(channel.getChannelId());
+        }
+        channelIdsByDevice.forEach(cascadeAssetCleanup::revokeChannels);
     }
 
     /**
@@ -878,10 +1070,13 @@ public class DeviceChannelManager {
                 .eq(deviceChannelDO.getDeviceId() != null, DeviceChannelDO::getDeviceId, deviceChannelDO.getDeviceId())
                 .eq(deviceChannelDO.getChannelId() != null, DeviceChannelDO::getChannelId, deviceChannelDO.getChannelId())
                 .eq(deviceChannelDO.getStatus() != null, DeviceChannelDO::getStatus, deviceChannelDO.getStatus())
+                .eq(deviceChannelDO.getEnabled() != null, DeviceChannelDO::getEnabled, deviceChannelDO.getEnabled())
                 .like(deviceChannelDO.getName() != null, DeviceChannelDO::getName, deviceChannelDO.getName())
                 // 在线优先：status=1(在线) 降序排前、0(离线) 在后；同状态内再按创建时间降序
                 .orderByDesc(DeviceChannelDO::getStatus)
                 .orderByDesc(DeviceChannelDO::getCreateTime);
+
+            appendOrgIdCondition(queryWrapper, deviceChannelDO.getOrgId());
 
             Page<DeviceChannelDO> pageQuery = new Page<>(page, size);
             Page<DeviceChannelDO> doPage = deviceChannelService.page(pageQuery, queryWrapper);
@@ -901,6 +1096,56 @@ public class DeviceChannelManager {
             log.error("分页查询设备通道失败 - 错误: {}", e.getMessage(), e);
             throw new ServiceException(ServiceExceptionEnum.CHANNEL_OPERATION_FAILED, e.getMessage());
         }
+    }
+
+    // ================================
+    // 本地资产层：组织归属与本地启停
+    // ================================
+
+    /**
+     * 组织归属筛选：{@code 0} 表示"未归组织"，按 IS NULL 查；其余按 id 精确匹配。
+     *
+     * <p>{@code null} 表示本次不按组织筛（不限）。
+     */
+    private static void appendOrgIdCondition(LambdaQueryWrapper<DeviceChannelDO> wrapper, Long orgId) {
+        if (orgId == null) {
+            return;
+        }
+        if (orgId == 0L) {
+            wrapper.isNull(DeviceChannelDO::getOrgId);
+        } else {
+            wrapper.eq(DeviceChannelDO::getOrgId, orgId);
+        }
+    }
+
+    /**
+     * 新增时的组织归属归一：{@code 0} 与 {@code null} 等价（组织主键从 1 开始，0 不是合法组织）。
+     */
+    private static Long normalizeOrgId(Long orgId) {
+        return orgId != null && orgId == 0L ? null : orgId;
+    }
+
+    /**
+     * 校验本地启用标记：只接受 0/1，{@code null} 表示本次不改。
+     *
+     * <p>该列决定通道是否进入上级平台目录，脏值会让组装器与前端开关判断同时失效。
+     */
+    private static void assertEnabledValid(Integer enabled) {
+        if (enabled != null && enabled != 0 && enabled != 1) {
+            throw new ServiceException(ServiceExceptionEnum.CHANNEL_OPERATION_FAILED, "本地启用标记只能是 0 或 1: " + enabled);
+        }
+    }
+
+    /**
+     * 清空通道的组织归属（落库为 null，改为跟随设备归属）。
+     *
+     * <p>{@code updateById} 默认跳过 null 列，没有这条定向 UPDATE 就无法把通道从组织里移走。
+     */
+    private void resetOrgId(Long id) {
+        deviceChannelService.lambdaUpdate()
+            .eq(DeviceChannelDO::getId, id)
+            .set(DeviceChannelDO::getOrgId, null)
+            .update();
     }
 
     // ================================

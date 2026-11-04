@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Savepoint;
 import java.sql.Statement;
 
 import javax.sql.DataSource;
@@ -36,6 +37,10 @@ import lombok.extern.slf4j.Slf4j;
  *   <li>{@code tb_device.org_id}：补可空的组织归属列</li>
  * </ul>
  *
+ * <p><b>取消同步策略不再建在组织表上</b>：{@code revoke_policy} 表达的是「推给某个平台时，
+ * 该组织停用后其下通道怎么办」，同一组织推两个平台可以一边 CASCADE 一边 REROUTE，
+ * 它属于发布关系而不是组织本身。老库残留的该列会被尽力删除（失败不影响启动）。
+ *
  * <p>SQLite 既不支持 {@code DROP COLUMN} 也不支持改列名，组织表只能<b>重建</b>：
  * 删旧索引 → {@code RENAME TO _cascade_org_legacy} → 按目标形状建表 → {@code INSERT ... SELECT}
  * 搬数据（编码换成 {@code org_code}、父列换成 {@code parent_id}）→ 删中间表 → 重建索引 → 重算物化路径。
@@ -53,6 +58,14 @@ public class SqliteCascadeSchemaMigrator {
     /** 迁移键：登记本次演进，只用于人工排查"这个库升级到哪一步了" */
     public static final String MIGRATION_KEY = "cascade-local-asset-and-publish";
 
+    /**
+     * 一次性回填键：从 {@code tb_cascade_channel} 反推「哪些组织曾经报过哪些平台」。
+     *
+     * <p>为什么要单独一个 key：回填只能跑一次。跑多次会把用户主动取消发布的组织又插回去——
+     * {@code INSERT OR IGNORE} 挡的是同名行，不是“用户不想发布”这个意图。
+     */
+    public static final String PUBLISH_BACKFILL_KEY = "cascade-publish-backfill-from-channel";
+
     private static final String ORG_TABLE      = "tb_cascade_org";
     private static final String CHANNEL_TABLE  = "tb_cascade_channel";
     private static final String DEVICE_TABLE   = "tb_device";
@@ -61,13 +74,19 @@ public class SqliteCascadeSchemaMigrator {
     private static final String ORG_CODE_COLUMN   = "org_code";
     private static final String ORG_PATH_COLUMN   = "org_path";
     private static final String ORG_PARENT_COLUMN = "parent_id";
-    private static final String REVOKE_COLUMN     = "revoke_policy";
     private static final String DEVICE_ORG_COLUMN = "org_id";
 
-    /** 1.10.0 及以前的列名，出现即说明需要重建 */
+    /** 1.10.1 之前组织表上的列，出现即说明需要重建或清理 */
     private static final String LEGACY_ORG_CODE_COLUMN   = "cascade_org_id";
     private static final String LEGACY_ORG_PARENT_COLUMN = "parent_org_id";
     private static final String LEGACY_PLATFORM_COLUMN   = "platform_id";
+    /**
+     * 同步策略列：1.10.1 起唯一合法的落点是 {@code tb_cascade_publish}。
+     *
+     * <p>同一组织推两个平台可以一边 CASCADE 一边 REROUTE，所以它是发布关系的属性；
+     * 组织表上出现同名列即是老版本残留，见 {@link #dropColumnQuietly}。
+     */
+    private static final String REVOKE_COLUMN            = "revoke_policy";
 
     /** 重建期间的中间表名：刻意不用 {@code tb_} 前缀，避免被 initializer 的表数校验算进去 */
     private static final String LEGACY_ORG_TABLE = "_cascade_org_legacy";
@@ -94,7 +113,6 @@ public class SqliteCascadeSchemaMigrator {
             + " org_name VARCHAR(255) NOT NULL,"
             + " sort_order INTEGER DEFAULT 0 NOT NULL,"
             + " enabled INTEGER DEFAULT 1 NOT NULL,"
-            + " revoke_policy VARCHAR(16) DEFAULT 'CASCADE' NOT NULL,"
             + " code_province VARCHAR(2) DEFAULT NULL,"
             + " code_city VARCHAR(2) DEFAULT NULL,"
             + " code_county VARCHAR(4) DEFAULT NULL,"
@@ -110,6 +128,10 @@ public class SqliteCascadeSchemaMigrator {
      * <p>这条"空即继承"是本表能只存差异的关键：{@code UNIQUE (platform_id, publish_code)}
      * 对 NULL 天然放行（SQLite/MySQL/PostgreSQL 一致），所以没被覆盖的对象不占用平台的编码空间，
      * 本地改了编码也不用逐个平台跟着改；一旦填了覆盖值，跨对象类型的重码照样被库拦住。
+     *
+     * <p>对象用业务键 {@code object_key} 定位（1.10.2 起），不是自增主键：见
+     * {@link SqliteCascadePublishKeyMigrator}。老库已存在旧形状时这里的
+     * {@code CREATE TABLE IF NOT EXISTS} 不会生效，由那支迁移器负责重建。
      */
     private static final String CREATE_PUBLISH_TABLE =
         "CREATE TABLE IF NOT EXISTS tb_cascade_publish ("
@@ -118,7 +140,8 @@ public class SqliteCascadeSchemaMigrator {
             + " update_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,"
             + " platform_id VARCHAR(64) NOT NULL,"
             + " object_type VARCHAR(16) NOT NULL,"
-            + " object_id INTEGER NOT NULL,"
+            + " object_key VARCHAR(128) NOT NULL,"
+            + " parent_key VARCHAR(128) DEFAULT NULL,"
             + " publish_code VARCHAR(64) DEFAULT NULL,"
             + " publish_name VARCHAR(128) DEFAULT NULL,"
             + " enabled INTEGER DEFAULT 1 NOT NULL,"
@@ -175,12 +198,27 @@ public class SqliteCascadeSchemaMigrator {
             boolean autoCommit = connection.getAutoCommit();
             connection.setAutoCommit(false);
             try {
-                /* 组织表重建必须先于建表：老表整体换成新形状，新库形已达标则跳过 */
-                rebuildLegacyOrgTable(connection);
+                /* 发布表必须先于组织表重建：旧行的 platform_id 是「这个组织曾推给谁」的唯一线索，
+                   重建一旦丢掉它就再也补不回来——那时发布表里还没有任何行可以对照 */
+                execute(connection, CREATE_PUBLISH_TABLE);
+                /* 老库的发布表可能还是 object_id 形状（由 1.10.2 的发布键迁移器重建），
+                   索引必须按实际列建，否则升级中途的库会在这一步报 no such column */
+                String publishKeyColumn = publishKeyColumn(connection);
+                /* 同一平台同一对象只允许一条发布配置 */
+                execute(connection, "CREATE UNIQUE INDEX IF NOT EXISTS uk_publish_object"
+                    + " ON tb_cascade_publish (platform_id, object_type, " + publishKeyColumn + ")");
+                /* 跨对象类型防重码：上级目录按 DeviceID 建索引，组织码与通道码撞了同样是丢节点 */
+                execute(connection, "CREATE UNIQUE INDEX IF NOT EXISTS uk_publish_code"
+                    + " ON tb_cascade_publish (platform_id, publish_code)");
+                execute(connection, "CREATE INDEX IF NOT EXISTS idx_publish_type"
+                    + " ON tb_cascade_publish (platform_id, object_type, enabled)");
+
+                /* 组织表重建：老表整体换成新形状，新库形已达标则跳过；重建过程顺手把发布行搬出来 */
+                rebuildLegacyOrgTable(connection, publishKeyColumn);
                 execute(connection, CREATE_ORG_TABLE);
                 addColumnIfMissing(connection, ORG_TABLE, ORG_PATH_COLUMN, "VARCHAR(512) NOT NULL DEFAULT ''");
-                /* 1.0.14：取消同步时其下通道的处置策略，历史行一律回落 CASCADE（连带剪掉） */
-                addColumnIfMissing(connection, ORG_TABLE, REVOKE_COLUMN, "VARCHAR(16) NOT NULL DEFAULT 'CASCADE'");
+                /* 策略已迁到发布表：组织表残留列尽力删除（老版本 SQLite 删不掉也不影响读写） */
+                dropColumnQuietly(connection, ORG_TABLE, REVOKE_COLUMN);
                 /* 1.10.1：七段编码规则列（预留，暂不生成）——只补列，不写值 */
                 for (String[] codeColumn : CODE_COLUMNS) {
                     addColumnIfMissing(connection, ORG_TABLE, codeColumn[0], codeColumn[1]);
@@ -193,27 +231,23 @@ public class SqliteCascadeSchemaMigrator {
                     + " ON tb_cascade_org (org_path)");
                 execute(connection, BACKFILL_ORG_PATH);
 
-                execute(connection, CREATE_PUBLISH_TABLE);
-                /* 同一平台同一对象只允许一条发布配置 */
-                execute(connection, "CREATE UNIQUE INDEX IF NOT EXISTS uk_publish_object"
-                    + " ON tb_cascade_publish (platform_id, object_type, object_id)");
-                /* 跨对象类型防重码：上级目录按 DeviceID 建索引，组织码与通道码撞了同样是丢节点 */
-                execute(connection, "CREATE UNIQUE INDEX IF NOT EXISTS uk_publish_code"
-                    + " ON tb_cascade_publish (platform_id, publish_code)");
-                execute(connection, "CREATE INDEX IF NOT EXISTS idx_publish_type"
-                    + " ON tb_cascade_publish (platform_id, object_type, enabled)");
-
                 /* 设备归属组织：可空，允许设备先接入、后归组织（现场调试常见） */
                 addColumnIfMissing(connection, DEVICE_TABLE, DEVICE_ORG_COLUMN, "INTEGER DEFAULT NULL");
                 execute(connection, "CREATE INDEX IF NOT EXISTS idx_device_org ON tb_device (org_id)");
 
-                /* 通道归属列在 1.10.1 仍然有效（S4 删除 tb_cascade_channel 时才退场） */
-                addColumnIfMissing(connection, CHANNEL_TABLE, LEGACY_ORG_CODE_COLUMN, "VARCHAR(64) DEFAULT NULL");
-                execute(connection, "CREATE INDEX IF NOT EXISTS idx_cascade_channel_org"
-                    + " ON tb_cascade_channel (platform_id, cascade_org_id)");
+                /* 通道归属列只在老表还在时补：1.10.2 起该表已退场，裸跑会撞 no such table */
+                if (tableExists(connection, CHANNEL_TABLE)) {
+                    addColumnIfMissing(connection, CHANNEL_TABLE, LEGACY_ORG_CODE_COLUMN,
+                        "VARCHAR(64) DEFAULT NULL");
+                    execute(connection, "CREATE INDEX IF NOT EXISTS idx_cascade_channel_org"
+                        + " ON tb_cascade_channel (platform_id, cascade_org_id)");
+                }
+
+                /* 组织表已去平台化、发布表仍空着的库（S1 先落地的那批）：从通道归属反推一次 */
+                backfillPublishFromChannel(connection, publishKeyColumn);
 
                 verify(connection);
-                recordApplied(connection);
+                recordApplied(connection, MIGRATION_KEY);
                 connection.commit();
             } catch (Exception e) {
                 rollbackQuietly(connection, e);
@@ -235,8 +269,12 @@ public class SqliteCascadeSchemaMigrator {
      * <p>旧唯一键是 {@code (platform_id, cascade_org_id)}，同一个 {@code cascade_org_id} 理论上可在
      * 多个平台各出现一次，直接搬到单列唯一会撞键。搬迁时首个（id 最小）保留原值，其余拼
      * {@code -platform_id} 后缀保命，并因此在最后整棵重算 {@code org_path}。
+     *
+     * <p>旧行的 {@code platform_id} 在这里被丢弃，但它是「这个组织曾经推给谁」的唯一记录，
+     * 所以在 {@code DROP TABLE} 之前把它转成 {@code tb_cascade_publish} 里的发布行。
+     * 不做的后果不是少几条配置，而是升级后所有上级目录一起变空。
      */
-    private void rebuildLegacyOrgTable(Connection connection) throws SQLException {
+    private void rebuildLegacyOrgTable(Connection connection, String publishKeyColumn) throws SQLException {
         if (!legacyOrgShape(connection)) {
             return;
         }
@@ -244,7 +282,9 @@ public class SqliteCascadeSchemaMigrator {
         String parentExpr = pick(connection, ORG_TABLE, ORG_PARENT_COLUMN,
             pick(connection, ORG_TABLE, LEGACY_ORG_PARENT_COLUMN, "NULL"));
         String orgPathExpr = pick(connection, ORG_TABLE, ORG_PATH_COLUMN, "''");
-        String revokeExpr = pick(connection, ORG_TABLE, REVOKE_COLUMN, "'CASCADE'");
+        boolean hasPlatform = columnExists(connection, ORG_TABLE, LEGACY_PLATFORM_COLUMN);
+        boolean hasLegacyCode = columnExists(connection, ORG_TABLE, LEGACY_ORG_CODE_COLUMN);
+        boolean hasLegacyRevoke = columnExists(connection, ORG_TABLE, REVOKE_COLUMN);
         String orgCodeExpr = orgCodeExpr(connection);
         StringBuilder codeExprs = new StringBuilder();
         for (String[] codeColumn : CODE_COLUMNS) {
@@ -259,12 +299,26 @@ public class SqliteCascadeSchemaMigrator {
         execute(connection, CREATE_ORG_TABLE);
         execute(connection, "INSERT OR IGNORE INTO tb_cascade_org"
             + " (id, create_time, update_time, parent_id, org_path, org_code, org_name, sort_order,"
-            + " enabled, revoke_policy, code_province, code_city, code_county, code_industry,"
+            + " enabled, code_province, code_city, code_county, code_industry,"
             + " code_type, code_network, code_start_seq, code_rule_enabled)"
             + " SELECT id, create_time, update_time, " + parentExpr + ", " + orgPathExpr + ", "
-            + orgCodeExpr + ", org_name, sort_order, enabled, " + revokeExpr
+            + orgCodeExpr + ", org_name, sort_order, enabled"
             + codeExprs
             + " FROM " + LEGACY_ORG_TABLE + " ORDER BY id");
+        if (hasPlatform) {
+            /* 编码被去重改写的组织（加了 -platformId 后缀），发布行用原编码补回去，
+               否则那个平台上的 DeviceID 整体变了名，上级会当成一批新节点 */
+            execute(connection, "INSERT OR IGNORE INTO tb_cascade_publish"
+                + " (platform_id, object_type, " + publishKeyColumn + ", publish_code, revoke_policy, enabled)"
+                + " SELECT l.platform_id, 'ORG', " + orgKeyExpr(publishKeyColumn) + ","
+                + " CASE WHEN o.org_code = l." + (hasLegacyCode ? LEGACY_ORG_CODE_COLUMN : "org_code")
+                + " THEN NULL ELSE l." + (hasLegacyCode ? LEGACY_ORG_CODE_COLUMN : "org_code") + " END,"
+                + (hasLegacyRevoke ? "l." + REVOKE_COLUMN : "NULL")
+                + ", 1"
+                + " FROM " + LEGACY_ORG_TABLE + " l JOIN tb_cascade_org o ON o.id = l.id"
+                + " WHERE l.platform_id IS NOT NULL AND l.platform_id <> ''");
+            log.info("SQLite 迁移：按旧 platform_id 回填组织发布行");
+        }
         execute(connection, "DROP TABLE " + LEGACY_ORG_TABLE);
         execute(connection, REBUILD_ORG_PATH);
         log.info("SQLite 迁移：tb_cascade_org 重建（cascade_org_id→org_code, parent_org_id→parent_id, 丢弃 platform_id）");
@@ -316,11 +370,15 @@ public class SqliteCascadeSchemaMigrator {
         requireColumn(connection, ORG_TABLE, ORG_CODE_COLUMN);
         requireColumn(connection, ORG_TABLE, ORG_PARENT_COLUMN);
         requireColumn(connection, ORG_TABLE, ORG_PATH_COLUMN);
-        requireColumn(connection, ORG_TABLE, REVOKE_COLUMN);
+        requireColumn(connection, PUBLISH_TABLE, REVOKE_COLUMN);
         for (String[] codeColumn : CODE_COLUMNS) {
             requireColumn(connection, ORG_TABLE, codeColumn[0]);
         }
         requireColumn(connection, DEVICE_TABLE, DEVICE_ORG_COLUMN);
+        /* 老表在才校验它的归属列：1.10.2 之后它已退场，缺席才是正确形态 */
+        if (tableExists(connection, CHANNEL_TABLE)) {
+            requireColumn(connection, CHANNEL_TABLE, LEGACY_ORG_CODE_COLUMN);
+        }
         requireIndex(connection, "uk_cascade_org_code");
         requireIndex(connection, "uk_publish_object");
         requireIndex(connection, "uk_publish_code");
@@ -396,10 +454,106 @@ public class SqliteCascadeSchemaMigrator {
         }
     }
 
-    private void recordApplied(Connection connection) throws SQLException {
+    /**
+     * 把 {@code revoke_policy} 从组织表上抹掉。
+     *
+     * <p>SQLite 3.35 才支持 {@code DROP COLUMN}，且删列可能因索引/约束失败。那两种情况下
+     * 保留一列遗留数据不影响任何读写（实体已不再映射它），所以失败只降级为警告——
+     * 为一列死数据把启动卡死，比带病运行更糟。
+     */
+    private void dropColumnQuietly(Connection connection, String table, String column) throws SQLException {
+        if (!columnExists(connection, table, column)) {
+            return;
+        }
+        Savepoint savepoint = connection.setSavepoint();
+        try {
+            execute(connection, "ALTER TABLE " + table + " DROP COLUMN " + column);
+            connection.releaseSavepoint(savepoint);
+            log.info("SQLite 迁移删列: {}.{}", table, column);
+        } catch (SQLException e) {
+            /* 回到删列前的状态，否则这条失败语句可能已经把事务带进不可提交态 */
+            connection.rollback(savepoint);
+            log.warn("SQLite 迁移无法删除列 {}.{}（保留不影响读写）: {}", table, column, e.getMessage());
+        }
+    }
+
+    /**
+     * 从 {@code tb_cascade_channel} 反推「哪些组织曾经报过哪些平台」，补成发布行。
+     *
+     * <p>只跑一次（见 {@link #PUBLISH_BACKFILL_KEY}）：反复跑会把用户主动取消发布的组织插回去，
+     * {@code INSERT OR IGNORE} 只能挡掉重复行，挡不住“用户不想发”。
+     */
+    private void backfillPublishFromChannel(Connection connection, String keyColumn) throws SQLException {
+        if (historyContains(connection, PUBLISH_BACKFILL_KEY)
+            || !tableExists(connection, CHANNEL_TABLE) || !tableExists(connection, ORG_TABLE)) {
+            return;
+        }
+        int seeded = executeUpdate(connection, "INSERT OR IGNORE INTO tb_cascade_publish"
+            + " (platform_id, object_type, " + keyColumn + ", enabled)"
+            + " SELECT DISTINCT c.platform_id, 'ORG', " + orgKeyExpr(keyColumn) + ", 1"
+            + " FROM tb_cascade_channel c"
+            + " JOIN tb_cascade_org o ON o.org_code = c.cascade_org_id"
+            + " WHERE c.platform_id IS NOT NULL AND c.platform_id <> ''");
+        /* 通道只指到叶子组织，而目录要求整条祖先链都已发布，缺一个祖先上级就看不到这棵子树 */
+        int ancestors = backfillPublishAncestors(connection, keyColumn);
+        recordApplied(connection, PUBLISH_BACKFILL_KEY);
+        log.info("SQLite 迁移：按通道归属回填组织发布行 {} 条、补齐祖先链 {} 条", seeded, ancestors);
+    }
+
+    /**
+     * 给已存在的发布行补齐祖先链，返回新插行数。
+     *
+     * <p>逐层上推而不是一把递归 CTE：层数就是树高（现场很少超过四层），而递归 CTE 一旦碰到
+     * 脏数据里的父子环就停不下来，迁移器不应为了漂亮的多行 SQL 去赌数据形状。
+     */
+    private int backfillPublishAncestors(Connection connection, String keyColumn) throws SQLException {
+        /* 自连接取父组织：object_key 形状要拿父的 org_code，旧形状直接拿 parent_id */
+        String parentExpr = "object_key".equals(keyColumn) ? "parent.org_code" : "o.parent_id";
+        String fromExpr = "object_key".equals(keyColumn)
+            ? " FROM tb_cascade_publish p"
+                + " JOIN tb_cascade_org o ON o.org_code = p.object_key"
+                + " JOIN tb_cascade_org parent ON parent.id = o.parent_id"
+            : " FROM tb_cascade_publish p"
+                + " JOIN tb_cascade_org o ON o.id = p.object_id";
+        String sql = "INSERT OR IGNORE INTO tb_cascade_publish"
+            + " (platform_id, object_type, " + keyColumn + ", enabled)"
+            + " SELECT DISTINCT p.platform_id, 'ORG', " + parentExpr + ", 1"
+            + fromExpr
+            + " WHERE p.object_type = 'ORG' AND o.parent_id IS NOT NULL";
+        int total = 0;
+        while (true) {
+            int added = executeUpdate(connection, sql);
+            if (added <= 0) {
+                return total;
+            }
+            total += added;
+        }
+    }
+
+    /** 当前发布表用哪一列定位对象：1.10.2 之前是 {@code object_id}，之后是 {@code object_key} */
+    private String publishKeyColumn(Connection connection) throws SQLException {
+        return columnExists(connection, PUBLISH_TABLE, "object_key") ? "object_key" : "object_id";
+    }
+
+    /** 往发布表写组织键时的取值列：业务键取 {@code org_code}，旧形状取自增 id */
+    private String orgKeyExpr(String keyColumn) {
+        return "object_key".equals(keyColumn) ? "o.org_code" : "o.id";
+    }
+
+    private boolean historyContains(Connection connection, String key) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+            "SELECT 1 FROM schema_migration_history WHERE migration_key = ?")) {
+            ps.setString(1, key);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    private void recordApplied(Connection connection, String key) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
             "INSERT OR IGNORE INTO schema_migration_history(migration_key, applied_at) VALUES(?, CURRENT_TIMESTAMP)")) {
-            ps.setString(1, MIGRATION_KEY);
+            ps.setString(1, key);
             ps.executeUpdate();
         }
     }
@@ -407,6 +561,13 @@ public class SqliteCascadeSchemaMigrator {
     private void execute(Connection connection, String sql) throws SQLException {
         try (Statement statement = connection.createStatement()) {
             statement.execute(sql);
+        }
+    }
+
+    /** 只需要行数时用它（回填循环靠它判断“补完了没”） */
+    private int executeUpdate(Connection connection, String sql) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            return statement.executeUpdate(sql);
         }
     }
 

@@ -9,6 +9,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.annotation.Transactional;
 
 import io.github.lunasaw.voglander.config.CacheTestConfig;
+import io.github.lunasaw.voglander.config.CascadeRevokeTestConfig;
 import io.github.lunasaw.voglander.config.TestRedisConfig;
 import lombok.extern.slf4j.Slf4j;
 
@@ -22,6 +23,7 @@ import lombok.extern.slf4j.Slf4j;
  * - 数据库事务支持（测试结束后自动回滚）
  * - 使用随机端口避免并发测试端口冲突
  * - 使用 Mock Redis beans 避免真实 Redis 连接
+ * - 级联撤销（删本地前先向上级取消上报并等确认）走测试桩，不会真发 SIP 也不会等超时
  * - 适用于跨层级的集成测试
  *
  * 注意：
@@ -36,7 +38,7 @@ import lombok.extern.slf4j.Slf4j;
     io.github.lunasaw.voglander.web.ApplicationWeb.class,
 }, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@Import({CacheTestConfig.class, TestRedisConfig.class})
+@Import({CacheTestConfig.class, TestRedisConfig.class, CascadeRevokeTestConfig.class})
 @Transactional
 @TestPropertySource(properties = {
     "local.sip.server.enabled=true",

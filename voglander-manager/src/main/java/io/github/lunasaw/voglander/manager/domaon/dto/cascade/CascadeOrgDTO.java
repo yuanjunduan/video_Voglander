@@ -6,13 +6,15 @@ import java.util.List;
 import lombok.Data;
 
 /**
- * 级联组织树 DTO。
+ * 级联组织树 DTO（<b>本地资产</b>，不携带上级平台）。
  *
- * <p>组织是上级目录树里的<b>中间节点</b>：域节点 → 组织节点 → 通道节点。
- * 通道的 {@code ParentID} 指向组织编码；缺组织层时通道是孤儿节点，上级界面看不到。
+ * <p>组织是上级目录树里的<b>中间节点</b>：域节点 → 组织节点 → 设备节点 → 通道节点。
+ * 同一棵组织树可以被发布到任意多个上级平台，推给谁由 {@code tb_cascade_publish} 表达，
+ * 因此本 DTO 没有 {@code platformId}——出现它就意味着组织又被绑死在某个平台上了。
  *
- * <p>{@code cascadeOrgId} 是 20 位国标编码，由 {@code CascadeOrgManager} 在新增时生成，
- * <b>下发后不可变更</b>——上级按该编码建树，改编码等价于删旧节点建新节点。
+ * <p>{@code orgCode} 是 20 位国标编码，由 {@code CascadeOrgManager} 在新增时生成。
+ * 它是<b>本地</b>编码：给某个上级用别的编码时写到该平台的 {@code publish_code}，
+ * 本地改编码只影响未做编码覆盖的平台。
  */
 @Data
 public class CascadeOrgDTO {
@@ -21,33 +23,49 @@ public class CascadeOrgDTO {
     private LocalDateTime     createTime;
     private LocalDateTime     updateTime;
 
-    /** 上级平台ID */
-    private String            platformId;
-    /** 父组织（tb_cascade_org.id），空=根组织，直接挂平台节点 */
-    private Long              parentOrgId;
+    /** 父组织（tb_cascade_org.id），空=根组织，直接挂域节点 */
+    private Long              parentId;
     /**
-     * 物化路径：根到自身的 {@code cascadeOrgId} 链，形如 {@code /A/B/}。
+     * 物化路径：根到自身的 {@code orgCode} 链，形如 {@code /A/B/}。
      *
      * <p>用于「以某组织为根取整棵子树」：{@code orgPath LIKE '/A/%'} 一条查询即覆盖。
      * 只读，由 {@code CascadeOrgManager} 生成，接口不接受外部传入。
      */
     private String            orgPath;
-    /** 上报给上级的组织编码（20 位） */
-    private String            cascadeOrgId;
-    /** 上报名称 */
+    /** 本地组织编码（20 位） */
+    private String            orgCode;
+    /** 组织名称 */
     private String            orgName;
     /** 同级排序 */
     private Integer           sortOrder;
-    /** 1-上报 0-不上报（整棵子树剪掉） */
+    /** 1-启用 0-停用（停用后其下设备/通道从所有平台目录里消失） */
     private Integer           enabled;
+
+    /* ---------------- 编码段规则（预留，不参与生成本轮） ---------------- */
+
+    private String            codeProvince;
+    private String            codeCity;
+    private String            codeCounty;
+    private String            codeIndustry;
+    private String            codeType;
+    private String            codeNetwork;
+    private Integer           codeStartSeq;
+    private Integer           codeRuleEnabled;
+
     /**
-     * 取消同步时其下通道的处置策略（{@code CascadeConstant.RevokePolicy}）。
+     * 已发布到的上级平台编码（只读，列表/树出参填充）。
      *
-     * <p>{@code CASCADE}：通道跟随组织一起从上级目录移除，恢复时一起回来；
-     * {@code REROUTE}：只移除组织，其下通道改挂域节点继续上报。
-     * 空值按 {@code CASCADE} 处理。
+     * <p>含 {@code enabled=0} 的发布行——页面上要能区分「配了但没开」与「根本没配」。
      */
-    private String            revokePolicy;
+    private List<String>      publishedPlatformIds;
+
+    /**
+     * <b>入参专用</b>：本次要发布到的平台编码集合。
+     *
+     * <p>只在新增组织时使用——「建组织 + 选推给哪些平台」一次完成，否则新组织一落地就是
+     * 一个谁都看不到的节点。出参不要读它，用 {@link #publishedPlatformIds}。
+     */
+    private List<String>      platformIds;
 
     /** 子组织，仅树形出参使用 */
     private List<CascadeOrgDTO> children;

@@ -5,6 +5,7 @@ import java.io.Serializable;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import org.apache.commons.lang3.StringUtils;
 
 import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
@@ -123,6 +124,55 @@ public class CascadePlatformVO implements Serializable {
     private String  transport;
 
     /**
+     * 目录是否带设备层：0=虚拟组织（通道直挂组织），1=域/组织/设备/通道。
+     *
+     * <p>前端用它决定「级联通道」页要不要展示设备分组：开启后通道节点会挂在设备节点下。
+     */
+    private Integer catalogWithDeviceLayer;
+
+    /* ---------------- 平台编码规则（前 14 位里可配的五段；类型位由对象类型决定，前端只读展示） ---------------- */
+
+    /**
+     * 省编码（2 位）；未配置为 null
+     */
+    private String  codeProvince;
+
+    /**
+     * 市编码（2 位）；未配置为 null
+     */
+    private String  codeCity;
+
+    /**
+     * 县区编码（4 位）；未配置为 null
+     */
+    private String  codeCounty;
+
+    /**
+     * 行业编码（2 位）；未配置为 null
+     */
+    private String  codeIndustry;
+
+    /**
+     * 网络标识（1 位）；未配置为 null
+     */
+    private String  codeNetwork;
+
+    /**
+     * 起始序号（6 位，只作发号下界）
+     */
+    private Integer codeStartSeq;
+
+    /**
+     * 平台编码规则开关：0=不启用 1=启用（空值按 0 下发）
+     */
+    private Integer codeRuleEnabled;
+
+    /**
+     * 发布策略：0=不自动补推祖先 1=自动补推（空值按 0 下发）
+     */
+    private Integer publishAncestors;
+
+    /**
      * 最近一次注册失败原因（来自 extend.lastError；空表示当前无错误）
      */
     private String  lastError;
@@ -167,6 +217,18 @@ public class CascadePlatformVO implements Serializable {
         vo.setRegisterExpires(dto.getRegisterExpires());
         vo.setCharset(dto.getCharset());
         vo.setTransport(dto.getTransport());
+        /* 空值按 0 下发：前端不需要再判 null，也不会因为 null 把开关渲染成未初始化 */
+        vo.setCatalogWithDeviceLayer(dto.getCatalogWithDeviceLayer() == null ? 0 : dto.getCatalogWithDeviceLayer());
+        /* 五段对外只保留一种「未配置」表示：通用更新走 updateById 会把空串原样写库，
+           规则保存写的是 NULL；不归一的话前端要同时判 null 与 "" 才算得对 */
+        vo.setCodeProvince(StringUtils.trimToNull(dto.getCodeProvince()));
+        vo.setCodeCity(StringUtils.trimToNull(dto.getCodeCity()));
+        vo.setCodeCounty(StringUtils.trimToNull(dto.getCodeCounty()));
+        vo.setCodeIndustry(StringUtils.trimToNull(dto.getCodeIndustry()));
+        vo.setCodeNetwork(StringUtils.trimToNull(dto.getCodeNetwork()));
+        vo.setCodeStartSeq(dto.getCodeStartSeq());
+        vo.setCodeRuleEnabled(dto.getCodeRuleEnabled() == null ? 0 : dto.getCodeRuleEnabled());
+        vo.setPublishAncestors(dto.getPublishAncestors() == null ? 0 : dto.getPublishAncestors());
         vo.setExtend(dto.getExtend());
         fillLastError(vo, dto.getExtend());
         return vo;

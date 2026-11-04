@@ -90,3 +90,14 @@ voglander:
       # allowed-root:                      # 可选：推流文件白名单根目录（路径穿越防护）
       zlm-host: http://127.0.0.1:8082      # ZLM HTTP API 地址（实际运行端口，见 config.ini [http] port=8082）
       zlm-secret: zlm                      # ZLM API secret（对应 config.ini [api] secret=zlm）
+
+# 级联国标编码七段规则总闸（N4a）。
+#
+# true 时组织编码按「省2+市2+县区4+行业2+类型3+网络1+序号6」生成；false 时沿用旧的本地序列，
+# 升级后上级目录里的编码一个字节都不变。它与组织级 code_rule_enabled 是「与」的关系：
+#   总闸开 + 组织开 → 该组织按规则生成；任一未开 → 回本地编码（org_code 原值）。
+# 重算入口 POST /cascade/org/{id}/code/reapply 同样受此开关约束。
+gateway:
+  cascade:
+    code-rule:
+      enabled: true

@@ -49,6 +49,21 @@ public class DeviceDTO implements Serializable {
      * 协议类型 {@link DeviceAgreementEnum}
      */
     private Integer type;
+
+    /**
+     * 所属级联组织（{@code tb_cascade_org.id}）。
+     *
+     * <p><b>三态语义</b>：{@code null} 不改（更新时跳过该列）；{@code 0} 清空归属（落库为 null）；
+     * 其余按 id 归组织。用 0 而不是另一个标记位，是因为组织主键从 1 开始，0 不可能是合法组织，
+     * 而 {@code updateById} 默认跳过 null 字段，没有 0 就永远无法把设备从组织里移走。
+     */
+    private Long              orgId;
+
+    /**
+     * 本地启用 1/0，{@code null} = 不改。与在线状态 {@code status} 无关。
+     */
+    private Integer           enabled;
+
     //扩展字段
     private String extend;
 
@@ -89,6 +104,8 @@ public class DeviceDTO implements Serializable {
         deviceDO.setKeepaliveTime(dto.getKeepaliveTime());
         deviceDO.setServerIp(dto.getServerIp());
         deviceDO.setType(dto.getType());
+        deviceDO.setOrgId(dto.getOrgId());
+        deviceDO.setEnabled(dto.getEnabled());
         deviceDO.setExtend(JSON.toJSONString(dto.getExtendInfo()));
         return deviceDO;
     }
@@ -110,6 +127,8 @@ public class DeviceDTO implements Serializable {
         deviceDTO.setKeepaliveTime(deviceDO.getKeepaliveTime());
         deviceDTO.setServerIp(deviceDO.getServerIp());
         deviceDTO.setType(deviceDO.getType());
+        deviceDTO.setOrgId(deviceDO.getOrgId());
+        deviceDTO.setEnabled(deviceDO.getEnabled());
         deviceDTO.setExtend(deviceDO.getExtend());
 
         ExtendInfo extendObj = getExtendObj(deviceDO.getExtend());

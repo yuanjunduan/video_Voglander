@@ -21,6 +21,8 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeChannelMetaResolver;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgView;
 import io.github.lunasaw.voglander.manager.manager.CascadeChannelManager;
 import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
 import io.github.lunasaw.voglander.manager.manager.CatalogVisibility;
@@ -54,9 +56,10 @@ class CascadeChannelControllerTest {
     void setup() {
         /* 旧用例不断言派生字段，留空即走兜底值，避免把派生规则重复写进控制器测试 */
         lenient().when(channelMetaResolver.resolve(any())).thenReturn(java.util.Map.of());
-        /* 可见性快照需要整平台数据才能算，控制器只负责填：这里给个全可见的条，避免用例依赖组织数据 */
-        lenient().when(cascadeOrgManager.catalogVisibility(any())).thenReturn(catalogVisibility);
-        lenient().when(catalogVisibility.isChannelVisible(any())).thenReturn(true);
+        /* 本地可达性快照与平台目录视图都要整库数据才能算，控制器只负责填：
+           默认给「本地全可见 + 平台目录为空」，需要可见的用例自己塞目录节点 */
+        lenient().when(cascadeOrgManager.catalogVisibility()).thenReturn(catalogVisibility);
+        lenient().when(cascadeOrgManager.platformOrgView(any())).thenReturn(CascadePlatformOrgView.empty());
         mvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 
@@ -106,7 +109,7 @@ class CascadeChannelControllerTest {
     }
 
     @Test
-    @DisplayName("详情：所属组织停报时 effective=false 且回填停报来源")
+    @DisplayName("详情：所属组织不在该平台目录内时 effective=false 且回填停报来源")
     void getById_marks_invisible_when_org_revoked() throws Exception {
         CascadeChannelDTO dto = new CascadeChannelDTO();
         dto.setId(7L);
@@ -114,7 +117,6 @@ class CascadeChannelControllerTest {
         dto.setEnabled(1);
         dto.setCascadeOrgId("34020000002150000002");
         when(cascadeChannelManager.getById(7L)).thenReturn(dto);
-        when(catalogVisibility.isChannelVisible("34020000002150000002")).thenReturn(false);
         when(catalogVisibility.blockedOrgName("34020000002150000002")).thenReturn("一层");
 
         mvc.perform(get("/api/v1/cascade/channel/7"))
@@ -122,6 +124,26 @@ class CascadeChannelControllerTest {
             .andExpect(jsonPath("$.data.enabled").value(1))
             .andExpect(jsonPath("$.data.effective").value(false))
             .andExpect(jsonPath("$.data.blockedByOrgName").value("一层"));
+    }
+
+    @Test
+    @DisplayName("详情：通道开启且组织已发布到该平台时 effective=true")
+    void getById_marks_visible_when_org_published() throws Exception {
+        CascadeChannelDTO dto = new CascadeChannelDTO();
+        dto.setId(7L);
+        dto.setPlatformId("p1");
+        dto.setEnabled(1);
+        dto.setCascadeOrgId("34020000002150000002");
+        when(cascadeChannelManager.getById(7L)).thenReturn(dto);
+        CascadePlatformOrgDTO org = new CascadePlatformOrgDTO();
+        org.setLocalCode("34020000002150000002");
+        org.setPlatformCode("34020000002150000002");
+        when(cascadeOrgManager.platformOrgView("p1"))
+            .thenReturn(new CascadePlatformOrgView(java.util.List.of(org), java.util.Set.of()));
+
+        mvc.perform(get("/api/v1/cascade/channel/7"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.effective").value(true));
     }
 
     @Test
@@ -155,22 +177,22 @@ class CascadeChannelControllerTest {
     }
 
     @Test
-    @DisplayName("取消同步：委托 manager.revoke（推 DEL 并保留记录）")
+    @DisplayName("取消上报：委托 manager.revoke（推 DEL 并保留记录）")
     void revoke_ok() throws Exception {
         when(cascadeChannelManager.revoke(7L)).thenReturn(true);
-        mvc.perform(post("/api/v1/cascade/channel/7/revoke"))
+        mvc.perform(post("/api/v1/cascade/channel/7/disable"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.data").value(true));
         verify(cascadeChannelManager).revoke(7L);
-        /* 取消同步不能走删除：删了就再也恢复不了 */
+        /* 取消上报不能走删除：删了就再也恢复不了 */
         verify(cascadeChannelManager, never()).delete(any());
     }
 
     @Test
-    @DisplayName("恢复同步：委托 manager.publish（推 ADD）")
+    @DisplayName("恢复上报：委托 manager.publish（推 ADD）")
     void publish_ok() throws Exception {
         when(cascadeChannelManager.publish(7L)).thenReturn(true);
-        mvc.perform(post("/api/v1/cascade/channel/7/publish"))
+        mvc.perform(post("/api/v1/cascade/channel/7/enable"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.data").value(true));
         verify(cascadeChannelManager).publish(7L);

@@ -1,7 +1,9 @@
 package io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade;
 
 import java.text.ParseException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import javax.sip.header.ContentTypeHeader;
 import javax.sip.message.Request;
@@ -21,6 +23,8 @@ import io.github.lunasaw.sip.common.entity.ToDevice;
 import io.github.lunasaw.sip.common.transmit.SipSender;
 import io.github.lunasaw.sip.common.transmit.request.SipRequestBuilderFactory;
 import io.github.lunasaw.sip.common.utils.SipRequestUtils;
+import io.github.lunasaw.voglander.client.service.cascade.CascadeCatalogRevokeService.Reason;
+import io.github.lunasaw.voglander.client.service.cascade.CascadeCatalogRevokeService.RevokeResult;
 import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.SubType;
 import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
 import io.github.lunasaw.voglander.common.event.LocalMobilePositionEvent;
@@ -74,6 +78,16 @@ public class CascadeNotifyPublisher {
      */
     @Value("${gateway.cascade.catalog.reparent-mode:UPDATE}")
     private String reparentMode = "UPDATE";
+
+    /**
+     * 删除前向上级取消上报时，等待其 2xx 的时长（秒）。
+     *
+     * <p>与 {@code gateway.cascade.notify.ack-timeout-sec} 分开配置：后者驱动后台重发，
+     * 前者是用户点一次删除能容忍的等待上限，两者需要独立调。海康这类上级响应通常在 1s 内，
+     * 10s 仍拿不到回应基本可以判定为链路不可用。
+     */
+    @Value("${gateway.cascade.catalog.delete-confirm-timeout-sec:10}")
+    private int deleteConfirmTimeoutSec = 10;
 
     /**
      * 推送一次<b>完整目录快照</b>（GB28181 §9.11 Catalog NOTIFY）。
@@ -285,6 +299,82 @@ public class CascadeNotifyPublisher {
             }
         }
         return sent;
+    }
+
+    /**
+     * 向上级<b>同步</b>撤销目录节点：逐条发 {@code Event=DEL} 并等上级 2xx。
+     *
+     * <p><b>与 {@link #pushCatalogDeleteBatch} 的分工</b>：那个方法只统计"发出了几条"，
+     * 不等结论，服务于不要求确认的被动场景（设备自己上报了 Catalog DEL）；删除本地资产前
+     * 必须知道上级到底取消没取消，所以这里额外 {@code trackSync} 并等满确认窗口。
+     *
+     * <p>报文全部先发出去再统一等响应：N 个节点的总耗时接近一次往返，而不是 N 次串行的往返。
+     *
+     * <p><b>不抛异常</b>：结论用 {@link RevokeResult} 返回，拦不拦由 manager 层的业务规则决定，
+     * 协议适配层不参与业务判断。
+     *
+     * @param platformId 上级平台编码
+     * @param nodes      待撤销节点，必须已按「叶子 → 根」排序
+     * @return 撤销结论，永不返回 {@code null}
+     */
+    public RevokeResult revokeCatalogNodes(String platformId, List<LocalCascadeCatalogChangeEvent.Node> nodes) {
+        if (StringUtils.isBlank(platformId) || nodes == null || nodes.isEmpty()) {
+            return new RevokeResult(platformId, Reason.CONFIRMED, 0, 0);
+        }
+        CascadePlatformDTO platform = cascadePlatformManager.getByPlatformId(platformId);
+        if (platform == null) {
+            log.warn("目录撤销跳过，找不到上级平台配置: platformId={}, 节点数={}", platformId, nodes.size());
+            return new RevokeResult(platformId, Reason.PLATFORM_ABSENT, 0, nodes.size());
+        }
+        Endpoint ep = endpoint(platform);
+        if (ep == null) {
+            return new RevokeResult(platformId, Reason.PLATFORM_ABSENT, 0, nodes.size());
+        }
+        String domainId = catalogAssembler.resolveDomainId(platform, ep.from.getUserId());
+        String eventId = resolveCatalogEventId(platformId, nextSn());
+
+        List<String> callIds = new ArrayList<>(nodes.size());
+        for (LocalCascadeCatalogChangeEvent.Node node : nodes) {
+            if (node == null || StringUtils.isBlank(node.cascadeId())) {
+                continue;
+            }
+            try {
+                String callId = sendIsolated(ep, CascadeManscdpXml.catalogEventNotify(domainId, nextSn(),
+                    new CascadeManscdpXml.CatalogEventItem(node.cascadeId(), node.name(),
+                        StringUtils.defaultIfBlank(node.parentCode(), domainId), "DEL")),
+                    eventId);
+                notifyAckTracker.trackSync(callId, platformId, "目录撤销 DEL → " + node.cascadeId());
+                callIds.add(callId);
+            } catch (Exception e) {
+                /* 发不出去就已有结论：不必再等，剩余节点也不会被上级看到这次删除 */
+                log.error("目录撤销报文发送失败: platformId={}, cascadeId={}", platformId, node.cascadeId(), e);
+                notifyAckTracker.awaitDelivery(callIds, 0L);
+                return new RevokeResult(platformId, Reason.SEND_FAILED, 0, callIds.size());
+            }
+        }
+        if (callIds.isEmpty()) {
+            return new RevokeResult(platformId, Reason.CONFIRMED, 0, 0);
+        }
+
+        Map<String, Integer> statuses = notifyAckTracker.awaitDelivery(callIds,
+            Math.max(1, deleteConfirmTimeoutSec) * 1000L);
+        int refusedStatus = 0;
+        int timedOut = 0;
+        for (Integer status : statuses.values()) {
+            if (status == CascadeNotifyAckTracker.STATUS_NO_RESPONSE) {
+                timedOut++;
+            } else if (status < 200 || status >= 300) {
+                refusedStatus = status;
+            }
+        }
+        Reason reason = refusedStatus > 0 ? Reason.REFUSED : (timedOut > 0 ? Reason.TIMEOUT : Reason.CONFIRMED);
+        if (reason != Reason.CONFIRMED) {
+            log.warn("目录撤销未获上级确认: platformId={}, reason={}, status={}, 节点数={}, 未响应数={}",
+                platformId, reason, refusedStatus, callIds.size(), timedOut);
+        } else {
+            log.info("目录撤销已获上级确认: platformId={}, 节点数={}", platformId, callIds.size());
+        }
+        return new RevokeResult(platformId, reason, refusedStatus, callIds.size());
     }
 
     /**

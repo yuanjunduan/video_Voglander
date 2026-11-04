@@ -6,29 +6,29 @@ import java.util.Set;
 
 import org.apache.commons.lang3.StringUtils;
 
-import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.RevokePolicy;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
 
 /**
- * 上级目录可见性快照：某个平台的整张组织树在上级眼里到底长什么样。
+ * 组织树的<b>本地</b>可见性快照：整棵树里每个节点是否真的可达。
  *
  * <p><b>为什么需要它</b>：{@code tb_cascade_org.enabled} 只是「自己的开关」，
- * 祖先停报后子孙的开关依旧是 1，但它们早已随祖先被 DEL 从上级目录删掉。
- * 页面只看 {@code enabled} 就会出现「显示上报中、上级其实看不到」，因此凡是
- * 「上级能不能看到」的判断都必须走这里，而不是看单条记录的开关。
+ * 祖先停用后子孙的开关依旧是 1，但它们已经随祖先从所有平台的目录里消失了。
+ * 页面只看 {@code enabled} 就会出现「显示启用、上级其实看不到」，因此凡是
+ * 「这个节点还有没有意义」的判断都必须走这里，而不是看单条记录的开关。
  *
- * <p><b>一次算好</b>：构造时整平台只查一次库，逐节点向上找第一个停报节点，
- * 列表出参、通道可见性都用同一份结果，避免 N+1 与口径漂移。
+ * <p><b>与平台无关</b>：本快照只回答「本地结构是否可达」。某个上级能不能看到，
+ * 还要叠加 {@code tb_cascade_publish} 的发布范围——那是发布层的事，
+ * 把两者揉在一起会让「上级看不到」无法归因到「结构断了」还是「没发布」。
  *
- * <p>通道可见性的判定口径必须与 {@code CascadeCatalogAssembler#isChannelVisible} 保持一致，
- * 否则「页面显示的」和「实际推给上级的」会长期不一致。
+ * <p><b>一次算好</b>：构造时全库只查一次，逐节点向上找第一个停用节点，
+ * 列表出参、通道归属校验都用同一份结果，避免 N+1 与口径漂移。
  */
 public final class CatalogVisibility {
 
     private final Map<String, CascadeOrgDTO> orgByCode;
-    /** 组织编码 → 卡住它的停报节点名称（自身停报即自身名称）；生效组织不在其中 */
+    /** 组织编码 → 卡住它的停用节点名称（自身停用即自身名称）；有效组织不在其中 */
     private final Map<String, String>       blockedByOrgName;
-    /** 自身与整条祖先链都在报的组织编码 */
+    /** 自身与整条祖先链都启用的组织编码 */
     private final Set<String>               effectiveCodes;
 
     CatalogVisibility(Map<String, CascadeOrgDTO> orgByCode, Map<String, String> blockedByOrgName,
@@ -39,44 +39,29 @@ public final class CatalogVisibility {
     }
 
     /**
-     * 组织在上级目录里是否可见。
+     * 组织在本地是否可达。
      *
-     * @param cascadeOrgId 组织编码；空表示不挂组织（挂域节点），按可见处理
+     * @param orgCode 组织编码；空表示不挂组织（挂域节点），按可见处理
      */
-    public boolean isOrgEffective(String cascadeOrgId) {
-        return StringUtils.isBlank(cascadeOrgId) || effectiveCodes.contains(cascadeOrgId);
+    public boolean isOrgEffective(String orgCode) {
+        return StringUtils.isBlank(orgCode) || effectiveCodes.contains(orgCode);
     }
 
     /**
-     * 组织被哪一级组织连带停报。
+     * 组织被哪一级组织连带停用。
      *
-     * @return 停报节点名称；组织生效或编码为空时返回 null
+     * @return 停用节点名称；组织有效或编码为空时返回 null
      */
-    public String blockedOrgName(String cascadeOrgId) {
-        return StringUtils.isBlank(cascadeOrgId) ? null : blockedByOrgName.get(cascadeOrgId);
+    public String blockedOrgName(String orgCode) {
+        return StringUtils.isBlank(orgCode) ? null : blockedByOrgName.get(orgCode);
     }
 
     /** 按编码取组织，供出参补充路径等信息；不存在返回 null。 */
-    public CascadeOrgDTO org(String cascadeOrgId) {
-        return StringUtils.isBlank(cascadeOrgId) ? null : orgByCode.get(cascadeOrgId);
+    public CascadeOrgDTO org(String orgCode) {
+        return StringUtils.isBlank(orgCode) ? null : orgByCode.get(orgCode);
     }
 
-    /**
-     * 通道在上级目录里是否仍会出现。
-     *
-     * <p>所属组织生效即可见；组织停报时按该组织的 {@code revokePolicy} 决定：
-     * {@code REROUTE} 上浮到域节点继续上报（可见），{@code CASCADE} 随组织一起消失。
-     * 组织已被物理删除时按可见处理——快照组装会兜底挂到域节点，不默默吞掉通道。
-     */
-    public boolean isChannelVisible(String cascadeOrgId) {
-        if (isOrgEffective(cascadeOrgId)) {
-            return true;
-        }
-        CascadeOrgDTO org = orgByCode.get(cascadeOrgId);
-        return org == null || RevokePolicy.REROUTE.equals(RevokePolicy.normalize(org.getRevokePolicy()));
-    }
-
-    /** 生效组织编码集合（只读）。 */
+    /** 有效组织编码集合（只读）。 */
     public Set<String> effectiveCodes() {
         return Collections.unmodifiableSet(effectiveCodes);
     }

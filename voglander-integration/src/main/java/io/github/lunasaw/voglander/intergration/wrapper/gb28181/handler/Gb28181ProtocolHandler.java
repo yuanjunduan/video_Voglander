@@ -571,7 +571,9 @@ public class Gb28181ProtocolHandler implements ProtocolEventHandler {
                     break;
                 case "DEL":
                     try {
-                        deviceChannelManager.deleteDeviceChannel(event.deviceId(), item.getDeviceId());
+                        /* 设备自己已从台账删了该通道，本端只是跟随清理；不能再走「先向上级撤销并等确认」，
+                           否则上级不可达时本地通道会删不掉、与设备台账长期不一致 */
+                        deviceChannelManager.deleteDeviceChannelUpstreamDeleted(event.deviceId(), item.getDeviceId());
                         changes++;
                     } catch (Exception e) {
                         log.warn("目录变更删除通道失败, deviceId={}, channelId={}, 错误={}",

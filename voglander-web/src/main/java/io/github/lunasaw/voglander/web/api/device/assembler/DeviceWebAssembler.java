@@ -57,6 +57,9 @@ public class DeviceWebAssembler {
             ? DeviceConstant.Status.ONLINE
             : DeviceConstant.Status.OFFLINE);
 
+        deviceDTO.setOrgId(createReq.getOrgId());
+        deviceDTO.setEnabled(createReq.getEnabled());
+
         // 转换扩展信息
         if (createReq.getExtendInfo() != null) {
             DeviceDTO.ExtendInfo extendInfo = new DeviceDTO.ExtendInfo();
@@ -117,6 +120,8 @@ public class DeviceWebAssembler {
 
         deviceDTO.setServerIp(updateReq.getServerIp());
         deviceDTO.setStatus(updateReq.getStatus());
+        deviceDTO.setOrgId(updateReq.getOrgId());
+        deviceDTO.setEnabled(updateReq.getEnabled());
 
         // 转换扩展信息
         if (updateReq.getExtendInfo() != null) {
@@ -180,6 +185,8 @@ public class DeviceWebAssembler {
         dto.setKeepaliveTimeEnd(toLocalDateTime(req.getKeepaliveTimeEnd()));
         dto.setRegisterTimeStart(toLocalDateTime(req.getRegisterTimeStart()));
         dto.setRegisterTimeEnd(toLocalDateTime(req.getRegisterTimeEnd()));
+        dto.setEnabled(req.getEnabled());
+        dto.setOrgId(req.getOrgId());
         return dto;
     }
 

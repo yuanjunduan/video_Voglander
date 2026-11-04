@@ -28,6 +28,7 @@ import io.github.lunasaw.voglander.intergration.wrapper.gb28181.config.propertie
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadePlatformManager;
 import io.github.lunasaw.voglander.web.api.cascade.assembler.CascadeWebAssembler;
+import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformCodeRuleReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformCreateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformPageReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformUpdateReq;
@@ -127,6 +128,39 @@ public class CascadePlatformController {
             restartScheduler(id);
         }
         return AjaxResult.success(ok);
+    }
+
+    /**
+     * 保存平台编码规则：前 14 位必填，类型位由对象类型只读决定。
+     *
+     * <p><b>为什么单独一个端点</b>：通用更新是 patch 语义（null=不改），而弹窗保存的是一整份配置，
+     * 必须能把某段清空、把开关关回 0。两种语义放在同一个 body 里，前端无法表达「我要清空这一段」。
+     *
+     * <p><b>不重启注册调度</b>：编码规则只影响后续发号，与 SIP 注册/保活无关；
+     * 重启会白白把已注册的平台推成「注册中」。
+     *
+     * <p><b>不在这里预检平台是否存在</b>：Manager 的 {@code Assert.notNull} 会在写库前抛
+     * {@code IllegalArgumentException}，与「启用缺段」「段位宽不对」走同一个 catch 分支，
+     * 报错文案只有一份，不会出现两处提示逐渐分叉。
+     *
+     * @param id  平台主键
+     * @param req 规则配置
+     * @return 是否保存成功
+     */
+    @PutMapping("/{id}/code-rule")
+    @Operation(summary = "保存平台编码规则",
+        description = "前 14 位必填（类型位由对象类型决定，不接受填写）；保存不改写既有上报编码")
+    public AjaxResult<Boolean> updateCodeRule(@PathVariable Long id,
+        @Valid @RequestBody CascadePlatformCodeRuleReq req) {
+        CascadePlatformDTO dto = cascadeWebAssembler.toDTO(req);
+        try {
+            boolean ok = cascadePlatformManager.updateCodeRule(id, dto);
+            return AjaxResult.success(ok);
+        } catch (IllegalArgumentException e) {
+            /* 启用缺段、段位宽不对是用户填错，不是系统异常：直接回可读原因，不留给全局异常处理记 ERROR */
+            log.warn("级联平台编码规则保存被拦: id={}, reason={}", id, e.getMessage());
+            return AjaxResult.error(e.getMessage());
+        }
     }
 
     @DeleteMapping("/{id}")

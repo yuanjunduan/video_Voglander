@@ -1,11 +1,13 @@
 package io.github.lunasaw.voglander.web.api.cascade.assembler;
 
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Component;
 
 import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePublishDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeRevokePreviewDTO;
 import io.github.lunasaw.voglander.manager.manager.CatalogVisibility;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelBatchBindReq;
@@ -14,10 +16,12 @@ import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelPageReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelUpdateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeOrgCreateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeOrgUpdateReq;
+import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformCodeRuleReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformCreateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformPageReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformUpdateReq;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeOrgVO;
+import io.github.lunasaw.voglander.web.api.cascade.vo.CascadePublishVO;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeRevokePreviewVO;
 
 import java.util.ArrayList;
@@ -60,6 +64,10 @@ public class CascadeWebAssembler {
         dto.setRegisterExpires(req.getRegisterExpires());
         dto.setCharset(req.getCharset());
         dto.setTransport(req.getTransport());
+        dto.setCatalogWithDeviceLayer(req.getCatalogWithDeviceLayer());
+        applyPlatformCodeRule(dto, req.getCodeProvince(), req.getCodeCity(), req.getCodeCounty(),
+            req.getCodeIndustry(), req.getCodeNetwork(), req.getCodeStartSeq(), req.getCodeRuleEnabled(),
+            req.getPublishAncestors());
         return dto;
     }
 
@@ -85,7 +93,45 @@ public class CascadeWebAssembler {
         dto.setRegisterExpires(req.getRegisterExpires());
         dto.setCharset(req.getCharset());
         dto.setTransport(req.getTransport());
+        /* 空值不传：updateById 会跳过 null 列，正好保持“没提交就不改”；编码段的空串=清空该段 */
+        dto.setCatalogWithDeviceLayer(req.getCatalogWithDeviceLayer());
+        applyPlatformCodeRule(dto, req.getCodeProvince(), req.getCodeCity(), req.getCodeCounty(),
+            req.getCodeIndustry(), req.getCodeNetwork(), req.getCodeStartSeq(), req.getCodeRuleEnabled(),
+            req.getPublishAncestors());
         return dto;
+    }
+
+    /**
+     * 平台编码规则保存请求 → DTO（整份覆盖：未传的段就是未配置，与通用更新的「null 不改」不同）。
+     */
+    public CascadePlatformDTO toDTO(CascadePlatformCodeRuleReq req) {
+        if (req == null) {
+            return null;
+        }
+        CascadePlatformDTO dto = new CascadePlatformDTO();
+        applyPlatformCodeRule(dto, req.getCodeProvince(), req.getCodeCity(), req.getCodeCounty(),
+            req.getCodeIndustry(), req.getCodeNetwork(), req.getCodeStartSeq(), req.getCodeRuleEnabled(),
+            req.getPublishAncestors());
+        return dto;
+    }
+
+    /**
+     * 平台编码规则八列透传：新增、编辑、专用规则接口共用一份映射。
+     *
+     * <p>段位已在 Req 入口 trim（粘贴进来的 {@code "  "} 按未填处理），装配层不再重复处理：
+     * 位宽由 Req 的 {@code @Pattern} 校验，「启用时必填」由 Manager 校验；
+     * 装配层再插一手只会让三条写入路径对同一个表单值有不同理解。
+     */
+    private void applyPlatformCodeRule(CascadePlatformDTO dto, String province, String city, String county,
+        String industry, String network, Integer startSeq, Integer ruleEnabled, Integer publishAncestors) {
+        dto.setCodeProvince(province);
+        dto.setCodeCity(city);
+        dto.setCodeCounty(county);
+        dto.setCodeIndustry(industry);
+        dto.setCodeNetwork(network);
+        dto.setCodeStartSeq(startSeq);
+        dto.setCodeRuleEnabled(ruleEnabled);
+        dto.setPublishAncestors(publishAncestors);
     }
 
     /**
@@ -171,19 +217,21 @@ public class CascadeWebAssembler {
     // ==================== 组织 ====================
 
     /**
-     * 组织新增请求 → DTO（{@code cascadeOrgId} 由 Manager 生成，不从入参透传）。
+     * 组织新增请求 → DTO（{@code orgCode} 与物化路径由 Manager 生成，不从入参透传）。
      */
     public CascadeOrgDTO toDTO(CascadeOrgCreateReq req) {
         if (req == null) {
             return null;
         }
         CascadeOrgDTO dto = new CascadeOrgDTO();
-        dto.setPlatformId(req.getPlatformId());
-        dto.setParentOrgId(req.getParentOrgId());
+        dto.setParentId(req.getParentId());
         dto.setOrgName(req.getOrgName());
         dto.setSortOrder(req.getSortOrder());
         dto.setEnabled(req.getEnabled());
-        dto.setRevokePolicy(req.getRevokePolicy());
+        dto.setPlatformIds(req.getPlatformIds());
+        applyCodeRule(dto, req.getCodeProvince(), req.getCodeCity(), req.getCodeCounty(),
+            req.getCodeIndustry(), req.getCodeType(), req.getCodeNetwork(), req.getCodeStartSeq(),
+            req.getCodeRuleEnabled());
         return dto;
     }
 
@@ -196,11 +244,13 @@ public class CascadeWebAssembler {
         }
         CascadeOrgDTO dto = new CascadeOrgDTO();
         dto.setId(req.getId());
-        dto.setParentOrgId(req.getParentOrgId());
+        dto.setParentId(req.getParentId());
         dto.setOrgName(req.getOrgName());
         dto.setSortOrder(req.getSortOrder());
         dto.setEnabled(req.getEnabled());
-        dto.setRevokePolicy(req.getRevokePolicy());
+        applyCodeRule(dto, req.getCodeProvince(), req.getCodeCity(), req.getCodeCounty(),
+            req.getCodeIndustry(), req.getCodeType(), req.getCodeNetwork(), req.getCodeStartSeq(),
+            req.getCodeRuleEnabled());
         return dto;
     }
 
@@ -214,13 +264,16 @@ public class CascadeWebAssembler {
     }
 
     /**
-     * 组织 DTO → VO，附带上级目录可见性（{@code effective} / {@code blockedByOrgName}）。
+     * 组织 DTO → VO，附带<b>本地</b>可达性（{@code effective} / {@code blockedByOrgName}）。
      *
-     * <p>可见性由整平台的快照算出，必须与列表同源：只看 {@code enabled} 会把
-     * 「被祖先连带停报」的节点误显示成上报中。
+     * <p>可见性由整库快照算出，必须与列表同源：只看 {@code enabled} 会把
+     * 「被祖先连带停用」的节点误显示成启用。
+     *
+     * <p>发布范围（{@code publishedPlatformIds}）随 DTO 下发，与本地可达性分开看：
+     * 本地可达 ∩ 已发布，才是某个上级真能看到。
      *
      * @param dto        组织 DTO；入参为空返回 null
-     * @param visibility 平台可见性快照；为空时不做可见性填充
+     * @param visibility 本地可见性快照；为空时不做可见性填充
      */
     public CascadeOrgVO toVO(CascadeOrgDTO dto, CatalogVisibility visibility) {
         if (dto == null) {
@@ -230,18 +283,29 @@ public class CascadeWebAssembler {
         vo.setId(dto.getId());
         vo.setCreateTime(dto.createTimeToEpochMilli());
         vo.setUpdateTime(dto.updateTimeToEpochMilli());
-        vo.setPlatformId(dto.getPlatformId());
-        vo.setParentOrgId(dto.getParentOrgId());
+        vo.setParentId(dto.getParentId());
         vo.setOrgPath(dto.getOrgPath());
-        vo.setCascadeOrgId(dto.getCascadeOrgId());
+        vo.setOrgCode(dto.getOrgCode());
         vo.setOrgName(dto.getOrgName());
         vo.setSortOrder(dto.getSortOrder());
         vo.setEnabled(dto.getEnabled());
         if (visibility != null) {
-            vo.setEffective(visibility.isOrgEffective(dto.getCascadeOrgId()));
-            vo.setBlockedByOrgName(visibility.blockedOrgName(dto.getCascadeOrgId()));
+            vo.setEffective(visibility.isOrgEffective(dto.getOrgCode()));
+            vo.setBlockedByOrgName(visibility.blockedOrgName(dto.getOrgCode()));
         }
-        vo.setRevokePolicy(dto.getRevokePolicy());
+        if (dto.getPublishedPlatformIds() != null) {
+            vo.setPublishedPlatformIds(new ArrayList<>(dto.getPublishedPlatformIds()));
+        }
+        /* 六段对外只保留一种「未配置」表示：updateById 会把入参里的空串/空白原样写库，
+           不归一的话前端要同时判 null 与 "" 才算得对 */
+        vo.setCodeProvince(StringUtils.trimToNull(dto.getCodeProvince()));
+        vo.setCodeCity(StringUtils.trimToNull(dto.getCodeCity()));
+        vo.setCodeCounty(StringUtils.trimToNull(dto.getCodeCounty()));
+        vo.setCodeIndustry(StringUtils.trimToNull(dto.getCodeIndustry()));
+        vo.setCodeType(StringUtils.trimToNull(dto.getCodeType()));
+        vo.setCodeNetwork(StringUtils.trimToNull(dto.getCodeNetwork()));
+        vo.setCodeStartSeq(dto.getCodeStartSeq());
+        vo.setCodeRuleEnabled(dto.getCodeRuleEnabled());
         vo.setChannelCount(dto.getChannelCount());
         if (dto.getChildren() != null) {
             List<CascadeOrgVO> children = new ArrayList<>(dto.getChildren().size());
@@ -275,10 +339,10 @@ public class CascadeWebAssembler {
     }
 
     /**
-     * 取消同步影响面 DTO → VO。
+     * 停用影响面 DTO → VO。
      *
      * <p>数量字段在这里一次算好再下发，避免前端各自 {@code length} 统计出现口径不一致；
-     * 投递条件（{@code platformOnline} / {@code catalogSubscribed} / {@code warnings}）
+     * 逐平台的投递条件（{@code platformOnline} / {@code catalogSubscribed} / {@code warnings}）
      * 由 Controller 探明后回填，装配层不依赖运行时组件。
      */
     public CascadeRevokePreviewVO toVO(CascadeRevokePreviewDTO dto) {
@@ -286,16 +350,50 @@ public class CascadeWebAssembler {
             return null;
         }
         CascadeRevokePreviewVO vo = new CascadeRevokePreviewVO();
-        vo.setPlatformId(dto.getPlatformId());
-        vo.setCascadeOrgId(dto.getCascadeOrgId());
+        vo.setOrgId(dto.getOrgId());
+        vo.setOrgCode(dto.getOrgCode());
         vo.setOrgName(dto.getOrgName());
-        vo.setRevokePolicy(dto.getRevokePolicy());
         vo.setOrgs(toNodeVOList(dto.getOrgs()));
         vo.setChannels(toNodeVOList(dto.getChannels()));
         vo.setOrgCount(dto.orgCount());
         vo.setChannelCount(dto.channelCount());
         vo.setDeleteCount(dto.deleteCount());
         return vo;
+    }
+
+    /**
+     * 发布配置 DTO → VO。
+     */
+    public CascadePublishVO toVO(CascadePublishDTO dto) {
+        if (dto == null) {
+            return null;
+        }
+        CascadePublishVO vo = new CascadePublishVO();
+        vo.setId(dto.getId());
+        vo.setPlatformId(dto.getPlatformId());
+        vo.setObjectType(dto.getObjectType());
+        vo.setObjectKey(dto.getObjectKey());
+        vo.setParentKey(dto.getParentKey());
+        vo.setPublishCode(dto.getPublishCode());
+        vo.setPublishName(dto.getPublishName());
+        vo.setEnabled(dto.getEnabled());
+        vo.setSortOrder(dto.getSortOrder());
+        vo.setRevokePolicy(dto.getRevokePolicy());
+        return vo;
+    }
+
+    /**
+     * 发布配置 DTO 列表 → VO 列表。
+     */
+    public List<CascadePublishVO> toPublishVOList(List<CascadePublishDTO> dtos) {
+        List<CascadePublishVO> list = new ArrayList<>();
+        if (dtos == null) {
+            return list;
+        }
+        for (CascadePublishDTO dto : dtos) {
+            list.add(toVO(dto));
+        }
+        return list;
     }
 
     private List<CascadeRevokePreviewVO.NodeVO> toNodeVOList(List<LocalCascadeCatalogChangeEvent.Node> nodes) {
@@ -317,7 +415,29 @@ public class CascadeWebAssembler {
     }
 
     /**
-     * 通道批量绑定请求 → DTO 列表（platformId 下发到每条；cascadeChannelId 缺省由 Manager 兜底）。
+     * 编码段七列透传：新增与编辑共用一份映射，避免两条路径对同一表单字段有不同理解。
+     *
+     * <p>这些列是<b>预留配置</b>：{@code codeRuleEnabled=0} 时后端仍按默认规则生成编码，
+     * 写入的值不参与本轮生成，只作为后续「按七段规则生码」的输入保留。
+     *
+     * <p>段位已在 Req 入口 trim（粘贴进来的 {@code "  "} 按未填处理），装配层不再重复处理：
+     * 落库归一由 Manager 负责——新增时直接 {@code trimToNull}，编辑时要先保留「空串=清空」
+     * 的原值交给 {@code updateById}，再补一次显式 SET，两者在这里都做不了。
+     */
+    private void applyCodeRule(CascadeOrgDTO dto, String province, String city, String county,
+        String industry, String type, String network, Integer startSeq, Integer ruleEnabled) {
+        dto.setCodeProvince(province);
+        dto.setCodeCity(city);
+        dto.setCodeCounty(county);
+        dto.setCodeIndustry(industry);
+        dto.setCodeType(type);
+        dto.setCodeNetwork(network);
+        dto.setCodeStartSeq(startSeq);
+        dto.setCodeRuleEnabled(ruleEnabled);
+    }
+
+    /**
+     * 通道批量绑定请求 → DTO 列表（platformId 下发到每条；cascadeChannelId 缺省由编码规则派生）。
      */
     public List<CascadeChannelDTO> toBatchDTOList(CascadeChannelBatchBindReq req) {
         List<CascadeChannelDTO> list = new ArrayList<>();

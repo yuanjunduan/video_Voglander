@@ -47,6 +47,16 @@ public class DevicePageReq implements Serializable {
     private Integer status;
 
     /**
+     * 本地启用 1启用 / 0停用（与在线状态无关）
+     */
+    private Integer enabled;
+
+    /**
+     * 所属级联组织 {@code tb_cascade_org.id}；{@code 0} 表示"未归组织"
+     */
+    private Long    orgId;
+
+    /**
      * 协议类型 {@link DeviceAgreementEnum}
      */
     private Integer type;

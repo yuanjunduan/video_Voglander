@@ -1,10 +1,12 @@
 package io.github.lunasaw.voglander.web.api.channel;
 
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import io.github.lunasaw.voglander.common.constant.ApiConstant;
 import io.github.lunasaw.voglander.manager.domaon.dto.DeviceChannelDTO;
+import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
 import io.github.lunasaw.voglander.manager.manager.DeviceChannelManager;
 import io.github.lunasaw.voglander.manager.service.DeviceChannelService;
 import io.github.lunasaw.voglander.repository.entity.DeviceChannelDO;
@@ -52,6 +54,9 @@ public class DeviceChannelController {
     private DeviceChannelManager deviceChannelManager;
 
     @Autowired
+    private CascadeOrgManager cascadeOrgManager;
+
+    @Autowired
     private DeviceChannelWebAssembler deviceChannelWebAssembler;
 
     @Autowired
@@ -86,6 +91,7 @@ public class DeviceChannelController {
             return AjaxResult.error("记录不存在");
         }
         DeviceChannelVO vo = deviceChannelWebAssembler.dtoToVo(result);
+        fillOrgName(java.util.Collections.singletonList(vo));
         return AjaxResult.success(vo);
     }
 
@@ -126,6 +132,7 @@ public class DeviceChannelController {
         List<DeviceChannelVO> voList = pageResult.getRecords().stream()
             .map(deviceChannelWebAssembler::dtoToVo)
             .collect(Collectors.toList());
+        fillOrgName(voList);
 
         DeviceChannelListResp resp = new DeviceChannelListResp();
         resp.setTotal(pageResult.getTotal());
@@ -226,6 +233,23 @@ public class DeviceChannelController {
     public AjaxResult<List<DeviceChannelVO>> listByDevice(
         @Parameter(description = "设备ID") @PathVariable(value = "deviceId") String deviceId) {
         List<DeviceChannelDTO> channels = deviceChannelDiscoveryService.listByDevice(deviceId);
-        return AjaxResult.success(deviceChannelWebAssembler.dtoListToVoList(channels));
+        List<DeviceChannelVO> voList = deviceChannelWebAssembler.dtoListToVoList(channels);
+        fillOrgName(voList);
+        return AjaxResult.success(voList);
+    }
+
+    /**
+     * 批量回填所属组织名称：列表只回传 orgId，名称用一次组织树索引补齐。
+     */
+    private void fillOrgName(List<DeviceChannelVO> items) {
+        if (items == null || items.isEmpty()) {
+            return;
+        }
+        Map<Long, String> nameById = cascadeOrgManager.nameIndexById();
+        for (DeviceChannelVO vo : items) {
+            if (vo.getOrgId() != null) {
+                vo.setOrgName(nameById.get(vo.getOrgId()));
+            }
+        }
     }
 }

@@ -42,6 +42,8 @@ public class DeviceChannelWebAssembler {
         dto.setDeviceId(createReq.getDeviceId());
         dto.setName(createReq.getName());
         dto.setStatus(DeviceConstant.Status.ONLINE); // 默认在线状态
+        dto.setOrgId(createReq.getOrgId());
+        dto.setEnabled(createReq.getEnabled());
 
         // 设置时间字段
         LocalDateTime now = LocalDateTime.now();
@@ -90,6 +92,8 @@ public class DeviceChannelWebAssembler {
         dto.setDeviceId(updateReq.getDeviceId());
         dto.setName(updateReq.getName());
         dto.setStatus(updateReq.getStatus());
+        dto.setOrgId(updateReq.getOrgId());
+        dto.setEnabled(updateReq.getEnabled());
 
         // 设置更新时间
         dto.setUpdateTime(LocalDateTime.now());
@@ -151,6 +155,8 @@ public class DeviceChannelWebAssembler {
         dto.setDeviceId(queryReq.getDeviceId());
         dto.setName(queryReq.getName());
         dto.setStatus(queryReq.getStatus());
+        dto.setOrgId(queryReq.getOrgId());
+        dto.setEnabled(queryReq.getEnabled());
 
         return dto;
     }

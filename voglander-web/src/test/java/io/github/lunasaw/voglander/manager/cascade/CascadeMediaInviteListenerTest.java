@@ -278,6 +278,9 @@ class CascadeMediaInviteListenerTest {
         setListenerField("probeGraceSec", 0L);
         setListenerField("activeIdleTimeoutSec", 0L);
         seedSession("call-idle", "0987654321", "hk-nvr165-ch3", "34020000001320000007", false);
+        /* 空闲判定是 idleMs > timeout*1000：超时配 0 时靠 idleMs 为正，同毫秒内扫描会得 0 而不回收。
+           把活动时间回拨，让用例不依赖时钟粒度。 */
+        ageSession("call-idle", 5000L);
 
         try (MockedStatic<ZlmRestService> zlm = mockStatic(ZlmRestService.class)) {
             zlm.when(() -> ZlmRestService.isMediaOnline(any(), any(), any(Map.class)))
@@ -499,6 +502,14 @@ class CascadeMediaInviteListenerTest {
         when(dialog.getSipProvider()).thenReturn(provider);
         when(provider.getNewClientTransaction(bye)).thenReturn(transaction);
         return dialog;
+    }
+
+    /** 把会话的「最后活动时间」往回调，制造确定的空闲时长（不赌时钟粒度）。 */
+    private void ageSession(String callId, long millis) throws Exception {
+        Object session = activeSessions().get(callId);
+        java.lang.reflect.Field field = session.getClass().getDeclaredField("lastActiveAt");
+        field.setAccessible(true);
+        field.set(session, ((Number) field.get(session)).longValue() - millis);
     }
 
     /** 把对话挂到指定会话上（对等 {@code sendInviteOk} 里抓取 UAS 对话那一步）。 */

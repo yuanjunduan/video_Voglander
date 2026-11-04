@@ -48,12 +48,14 @@ import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeD
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeNotifyAckTracker;
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeNotifyPublisher;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
-import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgView;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeSubscribeDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadeChannelManager;
 import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
 import io.github.lunasaw.voglander.manager.manager.CascadePlatformManager;
+import io.github.lunasaw.voglander.manager.manager.CascadePublishedAssetResolver;
 import io.github.lunasaw.voglander.manager.manager.CascadeSubscribeManager;
 import io.github.lunasaw.voglander.manager.manager.DeviceChannelManager;
 import io.github.lunasaw.voglander.manager.manager.SysConfigManager;
@@ -80,6 +82,8 @@ class CascadeNotifyPublisherTest {
     @Mock
     private CascadeChannelManager   cascadeChannelManager;
     @Mock
+    private CascadePublishedAssetResolver publishedAssetResolver;
+    @Mock
     private CascadeOrgManager       cascadeOrgManager;
     @Mock
     private CascadeDeviceSupplier   cascadeDeviceSupplier;
@@ -101,7 +105,7 @@ class CascadeNotifyPublisherTest {
         /* 无库内覆盖值时回落 yml/字段值（默认每包 50 条） */
         when(sysConfigManager.getInt(any(), anyInt())).thenAnswer(inv -> inv.getArgument(1));
         CascadeCatalogAssembler catalogAssembler = new CascadeCatalogAssembler(cascadePlatformManager,
-            cascadeOrgManager, cascadeChannelManager, deviceChannelManager, channelMetaResolver);
+            cascadeOrgManager, publishedAssetResolver, deviceChannelManager, channelMetaResolver);
         publisher = new CascadeNotifyPublisher(cascadeSubscribeManager, cascadePlatformManager,
             cascadeChannelManager, cascadeDeviceSupplier, notifyAckTracker, catalogAssembler, sysConfigManager);
     }
@@ -168,11 +172,11 @@ class CascadeNotifyPublisherTest {
     void catalog_snapshot_domain_then_rest() {
         String pf = "PF3";
         stubEndpoint(pf);
-        when(cascadeOrgManager.listEffective(pf)).thenReturn(List.of());
+        when(cascadeOrgManager.platformOrgView(pf)).thenReturn(CascadePlatformOrgView.empty());
         CascadeChannelDTO ch = channel(pf, "LOCAL01", "CASCADE01");
         ch.setEnabled(1);
         ch.setCascadeName("前门 <A&B>");
-        when(cascadeChannelManager.listByPlatformId(pf)).thenReturn(List.of(ch));
+        when(publishedAssetResolver.listChannels(pf)).thenReturn(List.of(ch));
         when(deviceChannelManager.mapChannelStatus(any())).thenReturn(java.util.Map.of());
 
         try (MockedStatic<SipRequestBuilderFactory> factoryMock = mockStatic(SipRequestBuilderFactory.class);
@@ -209,23 +213,20 @@ class CascadeNotifyPublisherTest {
     void catalog_snapshot_channel_hangs_under_org() {
         String pf = "PF5";
         stubEndpoint(pf);
-        CascadeOrgDTO org = new CascadeOrgDTO();
+        /* 组织视图已由 CascadeOrgManager 预处理好平台编码与父编码，组装器不再自己解析父子 */
+        CascadePlatformOrgDTO org = new CascadePlatformOrgDTO();
         org.setId(1L);
-        org.setPlatformId(pf);
-        org.setCascadeOrgId("34020000002150000001");
-        org.setOrgName("一层");
-        when(cascadeOrgManager.listEffective(pf)).thenReturn(List.of(org));
-        when(cascadeOrgManager.indexById(any())).thenAnswer(inv -> {
-            java.util.Map<Long, CascadeOrgDTO> m = new java.util.HashMap<>();
-            m.put(1L, org);
-            return m;
-        });
-        when(cascadeOrgManager.resolveParentCode(any(), any(), any())).thenReturn(DOMAIN_ID);
+        org.setLocalCode("34020000002150000001");
+        org.setPlatformCode("34020000002150000001");
+        org.setName("一层");
+        org.setSortOrder(0);
+        when(cascadeOrgManager.platformOrgView(pf))
+            .thenReturn(new CascadePlatformOrgView(List.of(org), java.util.Set.of()));
 
         CascadeChannelDTO ch = channel(pf, "LOCAL01", "CASCADE01");
         ch.setEnabled(1);
         ch.setCascadeOrgId("34020000002150000001");
-        when(cascadeChannelManager.listByPlatformId(pf)).thenReturn(List.of(ch));
+        when(publishedAssetResolver.listChannels(pf)).thenReturn(List.of(ch));
 
         try (MockedStatic<SipRequestBuilderFactory> factoryMock = mockStatic(SipRequestBuilderFactory.class);
              MockedStatic<SipSender> sipMock = mockStatic(SipSender.class);
@@ -246,8 +247,8 @@ class CascadeNotifyPublisherTest {
     void catalog_snapshot_empty_still_pushes_domain() {
         String pf = "PF4";
         stubEndpoint(pf);
-        when(cascadeOrgManager.listEffective(pf)).thenReturn(List.of());
-        when(cascadeChannelManager.listByPlatformId(pf)).thenReturn(List.of());
+        when(cascadeOrgManager.platformOrgView(pf)).thenReturn(CascadePlatformOrgView.empty());
+        when(publishedAssetResolver.listChannels(pf)).thenReturn(List.of());
 
         try (MockedStatic<SipRequestBuilderFactory> factoryMock = mockStatic(SipRequestBuilderFactory.class);
              MockedStatic<SipSender> sipMock = mockStatic(SipSender.class);

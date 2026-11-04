@@ -7,6 +7,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
 import io.github.lunasaw.voglander.config.CacheTestConfig;
+import io.github.lunasaw.voglander.config.CascadeRevokeTestConfig;
 import io.github.lunasaw.voglander.config.TestRedisConfig;
 import lombok.extern.slf4j.Slf4j;
 
@@ -123,7 +124,7 @@ import lombok.extern.slf4j.Slf4j;
     io.github.lunasaw.voglander.web.ApplicationWeb.class,
 }, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@Import({CacheTestConfig.class, TestRedisConfig.class})
+@Import({CacheTestConfig.class, TestRedisConfig.class, CascadeRevokeTestConfig.class})
 @TestPropertySource(properties = {
     "local.sip.server.enabled=true",
     "local.sip.server.ip=127.0.0.1",

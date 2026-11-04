@@ -67,6 +67,19 @@ public class DeviceUpdateReq implements Serializable {
     private Integer           status;
 
     /**
+     * 所属级联组织 {@code tb_cascade_org.id}。
+     *
+     * <p>三态：{@code null} 不改 / {@code 0} 清空（上报时挂域节点）/ 其余按 id 归组织。
+     */
+    private Long              orgId;
+
+    /**
+     * 本地启用 1/0，{@code null} 不改。与在线状态 {@code status} 无关：
+     * {@code status=0} 只是掉线（目录里仍出现），{@code enabled=0} 才从所有平台消失。
+     */
+    private Integer           enabled;
+
+    /**
      * 扩展信息
      */
     private ExtendInfoReq     extendInfo;

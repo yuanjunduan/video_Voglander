@@ -1,5 +1,7 @@
 package io.github.lunasaw.voglander.web.api.cascade;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -25,6 +27,7 @@ import io.github.lunasaw.voglander.intergration.wrapper.gb28181.config.propertie
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadePlatformManager;
 import io.github.lunasaw.voglander.web.api.cascade.assembler.CascadeWebAssembler;
+import io.github.lunasaw.voglander.web.api.cascade.vo.CascadePlatformVO;
 
 /**
  * CascadePlatformController 纯 Mockito + MockMvc 单元测试。
@@ -204,6 +207,23 @@ class CascadePlatformControllerTest {
     }
 
     @Test
+    @DisplayName("详情：五段空串/空格对外归一为 null，有值不动")
+    void vo_normalizes_blank_segments() {
+        CascadePlatformDTO dto = platform(5L, 1);
+        dto.setCodeProvince("");   // 通用更新走 updateById 会把空串原样写库
+        dto.setCodeCity("  ");     // 历史脏数据
+        dto.setCodeIndustry("00");
+        dto.setCodeNetwork("0");
+
+        CascadePlatformVO vo = CascadePlatformVO.convertVO(dto);
+        assertNull(vo.getCodeProvince(), "空串与 null 对外必须是同一种「未配置」，否则前端要判两次");
+        assertNull(vo.getCodeCity());
+        assertNull(vo.getCodeCounty());
+        assertEquals("00", vo.getCodeIndustry(), "有值不能被归一掉");
+        assertEquals("0", vo.getCodeNetwork());
+    }
+
+    @Test
     @DisplayName("分页：POST /getPage 委托 manager.getPage，返回 total + items")
     void page_ok() throws Exception {
         when(cascadePlatformManager.getPage(any(CascadePlatformDTO.class), eq(1), eq(20)))
@@ -268,6 +288,71 @@ class CascadePlatformControllerTest {
         verify(cascadeClientScheduler).refreshRegistrations();
     }
 
+    /* ---------------- 编码规则 ---------------- */
+
+    @Test
+    @DisplayName("编码规则：保存成功且不重启注册调度（规则与 SIP 注册无关）")
+    void save_code_rule_ok() throws Exception {
+        when(cascadePlatformManager.updateCodeRule(eq(5L), any(CascadePlatformDTO.class))).thenReturn(true);
+
+        mvc.perform(put("/api/v1/cascade/platform/5/code-rule")
+            .contentType(MediaType.APPLICATION_JSON).content(codeRuleBody()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data").value(true));
+
+        verify(cascadePlatformManager).updateCodeRule(eq(5L), argThat(d -> "34".equals(d.getCodeProvince())
+            && "02".equals(d.getCodeCity()) && Integer.valueOf(100).equals(d.getCodeStartSeq())
+            && Integer.valueOf(1).equals(d.getCodeRuleEnabled())
+            && Integer.valueOf(1).equals(d.getPublishAncestors())));
+        verify(cascadeClientScheduler, never()).startPlatform(any());
+        verify(cascadeClientScheduler, never()).stopPlatform(anyLong());
+    }
+
+    @Test
+    @DisplayName("编码规则：平台不存在时回可读错误（由 Manager 抛出，Controller 不预检）")
+    void save_code_rule_not_found() throws Exception {
+        when(cascadePlatformManager.updateCodeRule(eq(5L), any(CascadePlatformDTO.class)))
+            .thenThrow(new IllegalArgumentException("上级平台不存在：5"));
+
+        mvc.perform(put("/api/v1/cascade/platform/5/code-rule")
+            .contentType(MediaType.APPLICATION_JSON).content(codeRuleBody()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.msg").value("上级平台不存在：5"));
+
+        /* 预检去掉后只查一次库：存在性判断只保留 Manager 里的那一份 */
+        verify(cascadePlatformManager, never()).getById(anyLong());
+    }
+
+    @Test
+    @DisplayName("编码规则：启用但缺段时回可读原因，不抛系统异常")
+    void save_code_rule_incomplete_returns_reason() throws Exception {
+        when(cascadePlatformManager.updateCodeRule(eq(5L), any(CascadePlatformDTO.class)))
+            .thenThrow(new IllegalArgumentException("启用平台编码规则时前 14 位必填，缺少网络标识（1 位）"));
+
+        mvc.perform(put("/api/v1/cascade/platform/5/code-rule")
+            .contentType(MediaType.APPLICATION_JSON).content(codeRuleBody()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.msg").value("启用平台编码规则时前 14 位必填，缺少网络标识（1 位）"));
+    }
+
+    @Test
+    @DisplayName("编码规则：JSON 里的首尾空白在反序列化时经 setter 归一")
+    void save_code_rule_trims_on_deserialize() throws Exception {
+        when(cascadePlatformManager.updateCodeRule(eq(5L), any(CascadePlatformDTO.class))).thenReturn(true);
+
+        mvc.perform(put("/api/v1/cascade/platform/5/code-rule")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"codeProvince\":\" 34 \",\"codeCity\":\"02\",\"codeCounty\":\"0000\","
+                + "\"codeIndustry\":\"00\",\"codeNetwork\":\" 0 \",\"codeRuleEnabled\":1}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data").value(true));
+
+        /* 只测 setter 的话，换成别的 HttpMessageConverter 或改字段可见性都不会失败：
+           这一条钉住「Jackson 反序列化 → Req setter」整个链路，空白必须在 @Valid 之前去掉 */
+        verify(cascadePlatformManager).updateCodeRule(eq(5L), argThat(d ->
+            "34".equals(d.getCodeProvince()) && "0".equals(d.getCodeNetwork())));
+    }
+
     /* ---------------- 辅助 ---------------- */
 
     private static CascadePlatformDTO platform(Long id, Integer enabled) {
@@ -286,5 +371,12 @@ class CascadePlatformControllerTest {
     private static String createBody() {
         return "{\"platformId\":\"" + PLATFORM_ID + "\",\"platformIp\":\"10.0.0.1\","
             + "\"platformPort\":5060,\"localClientId\":\"" + LOCAL_CLIENT_ID + "\"}";
+    }
+
+    /** 一条完整规则：省34/市02/县0000/行业00/网络0 + 起始序号 100，规则与父链开关都打开 */
+    private static String codeRuleBody() {
+        return "{\"codeProvince\":\"34\",\"codeCity\":\"02\",\"codeCounty\":\"0000\","
+            + "\"codeIndustry\":\"00\",\"codeNetwork\":\"0\",\"codeStartSeq\":100,"
+            + "\"codeRuleEnabled\":1,\"publishAncestors\":1}";
     }
 }

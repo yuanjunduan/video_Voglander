@@ -82,6 +82,21 @@ public class DeviceVO implements Serializable {
     private String            protocolName;
 
     /**
+     * 所属级联组织 {@code tb_cascade_org.id}，空 = 未归组织（上报时挂域节点）
+     */
+    private Long              orgId;
+
+    /**
+     * 所属级联组织名称（Controller 批量回填，避免前端再拉一次组织树）
+     */
+    private String            orgName;
+
+    /**
+     * 本地启用 1启用 / 0停用，与在线状态 {@code status} 无关
+     */
+    private Integer           enabled;
+
+    /**
      * 该设备下的通道数（S1 列表展示，由 Controller 回填）
      */
     private Integer           channelCount;
@@ -116,6 +131,8 @@ public class DeviceVO implements Serializable {
         deviceVO.setServerIp(dto.getServerIp());
         deviceVO.setType(dto.getType());
         deviceVO.setTypeName(getTypeName(dto.getType()));
+        deviceVO.setOrgId(dto.getOrgId());
+        deviceVO.setEnabled(dto.getEnabled());
 
         // 解析设备种类和协议信息
         DeviceAgreementEnum agreementEnum = DeviceAgreementEnum.getByType(dto.getType());

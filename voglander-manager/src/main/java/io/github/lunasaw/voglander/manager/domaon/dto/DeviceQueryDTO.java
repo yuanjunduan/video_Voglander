@@ -52,6 +52,16 @@ public class DeviceQueryDTO implements Serializable {
     private Integer           type;
 
     /**
+     * 本地启用 1启用 / 0停用（与在线状态 {@code status} 无关）
+     */
+    private Integer           enabled;
+
+    /**
+     * 所属级联组织 {@code tb_cascade_org.id}；{@code 0} 表示"未归组织"（按 IS NULL 查）
+     */
+    private Long              orgId;
+
+    /**
      * 设备 IP（模糊匹配）
      */
     private String            ip;

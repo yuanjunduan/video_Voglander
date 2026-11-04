@@ -76,7 +76,8 @@ class SqliteCascadeSchemaMigratorTest {
         assertEquals("/" + LEGACY_ORG_CODE + "/", text("SELECT org_path FROM tb_cascade_org WHERE id=1"));
         assertEquals(0, scalar("SELECT code_rule_enabled FROM tb_cascade_org WHERE id=1"));
         assertEquals(1, scalar("SELECT count(*) FROM tb_cascade_org WHERE parent_id=1"));
-        assertEquals(1, countMigrationHistory());
+        /* 组织去平台化与「从通道反推发布关系」各登记一条：两张表都需要一次性的改写 */
+        assertEquals(2, countMigrationHistory());
     }
 
     @Test
@@ -132,7 +133,7 @@ class SqliteCascadeSchemaMigratorTest {
         migrator.migrate();
 
         assertEquals(2, scalar("SELECT count(*) FROM tb_cascade_org"));
-        assertEquals(1, countMigrationHistory());
+        assertEquals(2, countMigrationHistory(), "重复启动不能追加新的 migration 行");
     }
 
     @Test
@@ -164,19 +165,33 @@ class SqliteCascadeSchemaMigratorTest {
         assertTrue(columnExists("tb_device", "org_id"));
         assertTrue(indexExists("idx_device_org"));
 
-        /* 三行都不覆盖编码：全部回落本地码，唯一键不得拦 */
-        execute("INSERT INTO tb_cascade_publish(platform_id, object_type, object_id) VALUES('P1', 'ORG', 1)");
-        execute("INSERT INTO tb_cascade_publish(platform_id, object_type, object_id) VALUES('P1', 'DEVICE', 2)");
-        execute("INSERT INTO tb_cascade_publish(platform_id, object_type, object_id) VALUES('P1', 'CHANNEL', 3)");
-        assertEquals(3, scalar("SELECT count(*) FROM tb_cascade_publish"));
-        assertNull(text("SELECT publish_code FROM tb_cascade_publish WHERE object_type='ORG'"));
+        /* 旧 platform_id 必须停成发布行：否则组织一旦去平台化，「推给谁」这条信息就永久丢了 */
+        assertEquals(2, scalar("SELECT count(*) FROM tb_cascade_publish WHERE platform_id='P1'"),
+            "旧 platform_id 要逐行翻译成发布关系");
+        assertEquals(1, scalar("SELECT enabled FROM tb_cascade_publish"
+            + " WHERE platform_id='P1' AND object_type='ORG' AND object_key='" + LEGACY_ORG_CODE + "'"));
+        assertNull(text("SELECT publish_code FROM tb_cascade_publish"
+            + " WHERE platform_id='P1' AND object_key='" + LEGACY_ORG_CODE + "'"), "编码没被改写时留空即继承本地编码");
+
+        /* 换一个平台手工插：P1 已有回填行，同键再插会撞 uk_publish_object */
+        execute("INSERT INTO tb_cascade_publish(platform_id, object_type, object_key)"
+            + " VALUES('P9', 'ORG', '" + LEGACY_ORG_CODE + "')");
+        execute("INSERT INTO tb_cascade_publish(platform_id, object_type, object_key)"
+            + " VALUES('P9', 'DEVICE', '34020000001320000001')");
+        execute("INSERT INTO tb_cascade_publish(platform_id, object_type, object_key)"
+            + " VALUES('P9', 'CHANNEL', '34020000001320000001:34020000001310000001')");
+        assertEquals(5, scalar("SELECT count(*) FROM tb_cascade_publish"), "2 行回填 + 3 行手工");
+        assertNull(text("SELECT publish_code FROM tb_cascade_publish WHERE platform_id='P9' AND object_type='ORG'"));
 
         /* 填了覆盖值就要受平台内跨类型防重码约束 */
-        execute("UPDATE tb_cascade_publish SET publish_code='34020000002160000001' WHERE object_type='ORG'");
+        execute("UPDATE tb_cascade_publish SET publish_code='34020000002169999999'"
+            + " WHERE platform_id='P9' AND object_type='ORG'");
         IllegalStateException error = assertThrows(IllegalStateException.class, () -> execute(
-            "UPDATE tb_cascade_publish SET publish_code='34020000002160000001' WHERE object_type='CHANNEL'"));
+            "UPDATE tb_cascade_publish SET publish_code='34020000002169999999'"
+                + " WHERE platform_id='P9' AND object_type='CHANNEL'"));
         assertTrue(error.getCause() != null || error.getMessage() != null);
-        execute("UPDATE tb_cascade_publish SET publish_code='34020000001310000001' WHERE object_type='CHANNEL'");
+        execute("UPDATE tb_cascade_publish SET publish_code='34020000001310000001'"
+            + " WHERE platform_id='P9' AND object_type='CHANNEL'");
     }
 
     @Test

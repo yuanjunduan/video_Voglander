@@ -25,6 +25,7 @@ CREATE TABLE tb_device
     keepalive_time DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
     server_ip      VARCHAR(255)                           NOT NULL,
     org_id         INTEGER      DEFAULT NULL,
+    enabled        INTEGER      DEFAULT 1                 NOT NULL,
     extend         TEXT
 );
 
@@ -44,15 +45,23 @@ CREATE TABLE tb_device_channel
     channel_id      VARCHAR(50)  NOT NULL,
     device_id       VARCHAR(64)  NOT NULL,
     name            VARCHAR(255) DEFAULT NULL,
+    org_id          INTEGER      DEFAULT NULL,
+    enabled         INTEGER      NOT NULL DEFAULT 1,
     last_seen_time  DATETIME     DEFAULT NULL,
     status_source   VARCHAR(32)  DEFAULT NULL,
     missing_count   INTEGER      NOT NULL DEFAULT 0,
+    -- 1.10.3：通道「自己的码」落库位（上级看到的是共享编码 publish_code，这里是本地码）
+    code            VARCHAR(64)  DEFAULT NULL,
     extend          TEXT
 );
 
 CREATE UNIQUE INDEX idx_channel_device ON tb_device_channel (channel_id, device_id);
 CREATE INDEX idx_device_id ON tb_device_channel (device_id);
 CREATE INDEX idx_device_status ON tb_device_channel (device_id, status);
+-- 1.10.2：通道按组织归属聚合/校验占用
+CREATE INDEX idx_channel_org ON tb_device_channel (org_id);
+-- 1.10.3：按「自己的码」反查通道
+CREATE INDEX idx_channel_code ON tb_device_channel (code);
 
 -- ----------------------------
 -- Table structure for tb_device_config
@@ -753,37 +762,24 @@ CREATE TABLE tb_cascade_platform
     register_expires   INTEGER      DEFAULT 3600              NOT NULL,
     charset            VARCHAR(10)  DEFAULT 'GB2312'          NOT NULL,
     transport          VARCHAR(10)  DEFAULT 'UDP'             NOT NULL,
+    catalog_with_device_layer INTEGER DEFAULT 0              NOT NULL,
+    -- 平台级七段编码规则：只放前 14 位（省/市/县/行业/网络）+ 起始序号，类型位由对象类型决定
+    code_province      VARCHAR(2)  DEFAULT NULL,
+    code_city          VARCHAR(2)  DEFAULT NULL,
+    code_county        VARCHAR(4)  DEFAULT NULL,
+    code_industry      VARCHAR(2)  DEFAULT NULL,
+    code_network       VARCHAR(1)  DEFAULT NULL,
+    code_start_seq     INTEGER     DEFAULT NULL,
+    code_rule_enabled  INTEGER     NOT NULL DEFAULT 0,
+    -- 发布策略：勾选组织时是否顺带补推缺失的祖先链（0=不补推，缺祖先即报错）
+    publish_ancestors  INTEGER     NOT NULL DEFAULT 0,
     extend             TEXT
 );
 CREATE UNIQUE INDEX uk_cascade_platform_id ON tb_cascade_platform (platform_id);
 
 -- ----------------------------
--- 级联上报通道表
--- ----------------------------
-DROP TABLE IF EXISTS tb_cascade_channel;
-CREATE TABLE tb_cascade_channel
-(
-    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-    create_time        DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    update_time        DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    platform_id        VARCHAR(64)                            NOT NULL,
-    local_device_id    VARCHAR(64)                            NOT NULL,
-    local_channel_id   VARCHAR(64)                            NOT NULL,
-    cascade_channel_id VARCHAR(64)                            NOT NULL,
-    cascade_name       VARCHAR(255) DEFAULT NULL,
-    cascade_org_id     VARCHAR(64)  DEFAULT NULL,
-    enabled            INTEGER      DEFAULT 1                 NOT NULL,
-    manufacturer       VARCHAR(64)  DEFAULT NULL,
-    model              VARCHAR(128) DEFAULT NULL,
-    address            VARCHAR(255) DEFAULT NULL,
-    ip_address         VARCHAR(64)  DEFAULT NULL,
-    ptz_type           INTEGER      DEFAULT NULL
-);
-CREATE UNIQUE INDEX uk_cascade_platform_local ON tb_cascade_channel (platform_id, local_channel_id);
-CREATE INDEX idx_cascade_channel_org ON tb_cascade_channel (platform_id, cascade_org_id);
-
--- ----------------------------
--- 级联组织树表（上级按 Item/ParentID 建树，通道必须挂组织节点下才可见；每平台一套，与 tb_dept 解耦）
+-- 级联组织树表（本地资产，全局一套，不绑定上级平台；推给哪些平台由 tb_cascade_publish 表达）
+-- 上级按 Item/ParentID 建树，通道必须挂在组织节点下才可见
 -- ----------------------------
 DROP TABLE IF EXISTS tb_cascade_org;
 CREATE TABLE tb_cascade_org
@@ -797,7 +793,6 @@ CREATE TABLE tb_cascade_org
     org_name          VARCHAR(255)                           NOT NULL,
     sort_order        INTEGER      DEFAULT 0                 NOT NULL,
     enabled           INTEGER      DEFAULT 1                 NOT NULL,
-    revoke_policy     VARCHAR(16)  DEFAULT 'CASCADE'         NOT NULL,
     code_province     VARCHAR(2)   DEFAULT NULL,
     code_city         VARCHAR(2)   DEFAULT NULL,
     code_county       VARCHAR(4)   DEFAULT NULL,
@@ -813,7 +808,7 @@ CREATE INDEX idx_cascade_org_path ON tb_cascade_org (org_path);
 
 -- ----------------------------
 -- 级联发布表（每个上级平台一套可见性视图；本地资产不绑定平台，推给哪个平台由本表表达）
--- object_type: ORG=tb_cascade_org.id / DEVICE=tb_device.id / CHANNEL=tb_device_channel.id
+-- object_type: ORG=org_code / DEVICE=device_id / CHANNEL=device_id:channel_id
 -- ----------------------------
 DROP TABLE IF EXISTS tb_cascade_publish;
 CREATE TABLE tb_cascade_publish
@@ -823,8 +818,12 @@ CREATE TABLE tb_cascade_publish
     update_time   DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
     platform_id   VARCHAR(64)                            NOT NULL,
     object_type   VARCHAR(16)                            NOT NULL,
-    object_id     INTEGER                                NOT NULL,
+    object_key    VARCHAR(128)                           NOT NULL,
+    parent_key    VARCHAR(128) DEFAULT NULL,
     publish_code  VARCHAR(64)  DEFAULT NULL,
+    -- 编码来源与生成时间：AUTO=按规则生成并固化，MANUAL=人工填写（自动逻辑不得覆盖）
+    code_source         VARCHAR(8)  DEFAULT NULL,
+    code_generated_time DATETIME    DEFAULT NULL,
     publish_name  VARCHAR(128) DEFAULT NULL,
     enabled       INTEGER      DEFAULT 1                 NOT NULL,
     sort_order    INTEGER      DEFAULT NULL,
@@ -835,11 +834,17 @@ CREATE TABLE tb_cascade_publish
     ptz_type      INTEGER      DEFAULT NULL,
     civil_code    VARCHAR(64)  DEFAULT NULL,
     revoke_policy VARCHAR(16)  DEFAULT NULL,
+    -- 1.10.3：通道行冗余设备段（object_key 是拼接键，不能拿来当查询条件）+ 最近一次推送结论
+    device_key        VARCHAR(64)  DEFAULT NULL,
+    last_push_time    DATETIME     DEFAULT NULL,
+    last_push_status  VARCHAR(16)  DEFAULT NULL,
+    last_push_message VARCHAR(255) DEFAULT NULL,
     extend        TEXT
 );
-CREATE UNIQUE INDEX uk_publish_object ON tb_cascade_publish (platform_id, object_type, object_id);
+CREATE UNIQUE INDEX uk_publish_object ON tb_cascade_publish (platform_id, object_type, object_key);
 CREATE UNIQUE INDEX uk_publish_code ON tb_cascade_publish (platform_id, publish_code);
 CREATE INDEX idx_publish_type ON tb_cascade_publish (platform_id, object_type, enabled);
+CREATE INDEX idx_publish_device ON tb_cascade_publish (platform_id, object_type, device_key);
 
 -- ----------------------------
 -- 级联上级订阅表（上级订本平台 → 本平台据此主动推送）

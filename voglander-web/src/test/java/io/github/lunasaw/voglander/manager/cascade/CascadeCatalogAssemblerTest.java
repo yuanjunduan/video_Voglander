@@ -4,12 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -25,11 +25,13 @@ import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeC
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeChannelMeta;
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeChannelMetaResolver;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
-import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
-import io.github.lunasaw.voglander.manager.manager.CascadeChannelManager;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDeviceDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgView;
 import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
 import io.github.lunasaw.voglander.manager.manager.CascadePlatformManager;
+import io.github.lunasaw.voglander.manager.manager.CascadePublishedAssetResolver;
 import io.github.lunasaw.voglander.manager.manager.DeviceChannelManager;
 
 /**
@@ -58,7 +60,7 @@ class CascadeCatalogAssemblerTest {
     @Mock
     private CascadeOrgManager      cascadeOrgManager;
     @Mock
-    private CascadeChannelManager  cascadeChannelManager;
+    private CascadePublishedAssetResolver publishedAssetResolver;
     @Mock
     private DeviceChannelManager   deviceChannelManager;
     @Mock
@@ -69,25 +71,37 @@ class CascadeCatalogAssemblerTest {
     @BeforeEach
     void setUp() {
         assembler = new CascadeCatalogAssembler(cascadePlatformManager, cascadeOrgManager,
-            cascadeChannelManager, deviceChannelManager, channelMetaResolver);
+            publishedAssetResolver, deviceChannelManager, channelMetaResolver);
 
-        CascadePlatformDTO platform = new CascadePlatformDTO();
-        platform.setPlatformId(PLATFORM_ID);
-        platform.setLocalClientId(DOMAIN_ID);
+        CascadePlatformDTO platform = platform(0);
         when(cascadePlatformManager.getByPlatformId(PLATFORM_ID)).thenReturn(platform);
         when(deviceChannelManager.mapChannelStatus(any())).thenReturn(new HashMap<>());
         /* 默认不派生：通道项走 CascadeChannelMeta.DEFAULT（地址 China、枪机 3） */
         when(channelMetaResolver.resolve(any())).thenReturn(new HashMap<>());
     }
 
-    private CascadeOrgDTO org(Long id, String parentId, String code, String name) {
-        CascadeOrgDTO dto = new CascadeOrgDTO();
+    /** 平台配置：{@code deviceLayer} 0=通道直挂组织，1=多插一层设备节点 */
+    private CascadePlatformDTO platform(int deviceLayer) {
+        CascadePlatformDTO platform = new CascadePlatformDTO();
+        platform.setPlatformId(PLATFORM_ID);
+        platform.setLocalClientId(DOMAIN_ID);
+        platform.setCatalogWithDeviceLayer(deviceLayer);
+        return platform;
+    }
+
+    /**
+     * 目录节点：{@code platformCode} 是本平台的上报编码（可能被发布行覆盖），
+     * {@code parentPlatformCode} 是已解析好的父节点上报编码（null 时组装器回落域编码）。
+     */
+    private CascadePlatformOrgDTO platformOrg(Long id, String localCode, String platformCode,
+        String parentPlatformCode, String name, int sortOrder) {
+        CascadePlatformOrgDTO dto = new CascadePlatformOrgDTO();
         dto.setId(id);
-        dto.setPlatformId(PLATFORM_ID);
-        dto.setParentOrgId(parentId == null ? null : Long.valueOf(parentId));
-        dto.setCascadeOrgId(code);
-        dto.setOrgName(name);
-        dto.setEnabled(1);
+        dto.setLocalCode(localCode);
+        dto.setPlatformCode(platformCode);
+        dto.setParentPlatformCode(parentPlatformCode);
+        dto.setName(name);
+        dto.setSortOrder(sortOrder);
         return dto;
     }
 
@@ -103,21 +117,26 @@ class CascadeCatalogAssemblerTest {
         return dto;
     }
 
-    /** 两层组织 + 一个挂在子组织下的通道，父编码走真实的 resolveParentCode 语义。 */
+    /** 一条已发布设备：设备层开启时它会成为目录里的一层。 */
+    private CascadePlatformDeviceDTO device(String orgCode) {
+        CascadePlatformDeviceDTO device = new CascadePlatformDeviceDTO();
+        device.setLocalDeviceId("DEV1");
+        device.setPlatformCode("DEV1");
+        device.setName("门口设备");
+        device.setLocalOrgCode(orgCode);
+        device.setSortOrder(0);
+        device.setStatus(1);
+        return device;
+    }
+
+    /** 两层组织 + 一个挂在子组织下的通道；组织视图由 CascadeOrgManager 预处理好父子与编码。 */
     private List<CascadeCatalogNode> assembleTree() {
-        CascadeOrgDTO top = org(1L, null, ORG_TOP, "一层");
-        CascadeOrgDTO sub = org(2L, "1", ORG_SUB, "二层");
-        when(cascadeOrgManager.listEffective(PLATFORM_ID)).thenReturn(List.of(top, sub));
+        CascadePlatformOrgDTO top = platformOrg(1L, ORG_TOP, ORG_TOP, null, "一层", 1);
+        CascadePlatformOrgDTO sub = platformOrg(2L, ORG_SUB, ORG_SUB, ORG_TOP, "二层", 2);
+        when(cascadeOrgManager.platformOrgView(PLATFORM_ID))
+            .thenReturn(new CascadePlatformOrgView(List.of(top, sub), Set.of()));
 
-        Map<Long, CascadeOrgDTO> byId = new HashMap<>();
-        byId.put(1L, top);
-        byId.put(2L, sub);
-        when(cascadeOrgManager.indexById(any())).thenReturn(byId);
-
-        when(cascadeOrgManager.resolveParentCode(eq(top), any(), eq(DOMAIN_ID))).thenReturn(DOMAIN_ID);
-        when(cascadeOrgManager.resolveParentCode(eq(sub), any(), eq(DOMAIN_ID))).thenReturn(ORG_TOP);
-
-        when(cascadeChannelManager.listByPlatformId(PLATFORM_ID)).thenReturn(List.of(channel(ORG_SUB)));
+        when(publishedAssetResolver.listChannels(PLATFORM_ID)).thenReturn(List.of(channel(ORG_SUB)));
         return assembler.assemble(PLATFORM_ID, PLATFORM_ID);
     }
 
@@ -161,30 +180,36 @@ class CascadeCatalogAssemblerTest {
     }
 
     @Test
-    @DisplayName("通道所属组织未生效时改挂域节点，CivilCode 也随之等于域编码")
-    void channel_fallback_to_domain_keeps_civil_code_in_sync() {
-        when(cascadeOrgManager.listEffective(PLATFORM_ID)).thenReturn(List.of());
-        when(cascadeOrgManager.indexById(any())).thenReturn(Map.of());
-        when(cascadeChannelManager.listByPlatformId(PLATFORM_ID)).thenReturn(List.of(channel(ORG_SUB)));
+    @DisplayName("通道未归属任何组织时直接挂域节点，CivilCode 也随之等于域编码")
+    void channel_without_org_hangs_under_domain() {
+        when(cascadeOrgManager.platformOrgView(PLATFORM_ID)).thenReturn(CascadePlatformOrgView.empty());
+        when(publishedAssetResolver.listChannels(PLATFORM_ID)).thenReturn(List.of(channel(null)));
 
         List<CascadeCatalogNode> nodes = assembler.assemble(PLATFORM_ID, PLATFORM_ID);
 
         assertEquals(2, nodes.size(), "域节点 + 一个通道");
         CascadeCatalogNode ch = nodes.get(1);
-        assertEquals(DOMAIN_ID, ch.parentId(), "组织不存在时通道挂域节点");
+        assertEquals(DOMAIN_ID, ch.parentId(), "没有归属组织时通道挂域节点");
         assertEquals(DOMAIN_ID, ch.civilCode(), "CivilCode 必须跟着 ParentID 走：" + ch);
     }
 
     @Test
-    @DisplayName("组织取消同步且策略为 CASCADE 时，其下通道不再进快照")
+    @DisplayName("组织不在该平台目录里且未配 REROUTE 时，其下通道不上报")
+    void channel_of_unpublished_org_is_dropped() {
+        when(cascadeOrgManager.platformOrgView(PLATFORM_ID)).thenReturn(CascadePlatformOrgView.empty());
+        when(publishedAssetResolver.listChannels(PLATFORM_ID)).thenReturn(List.of(channel(ORG_SUB)));
+
+        List<CascadeCatalogNode> nodes = assembler.assemble(PLATFORM_ID, PLATFORM_ID);
+
+        assertEquals(1, nodes.size(), "默认 CASCADE：组织没进去，通道也不该单独出现: " + nodes);
+    }
+
+    @Test
+    @DisplayName("阻断组织配了 CASCADE 时，其下通道不进快照")
     void revoked_org_with_cascade_policy_hides_channels() {
-        CascadeOrgDTO revoked = org(2L, null, ORG_SUB, "已取消");
-        revoked.setEnabled(0);
-        revoked.setRevokePolicy("CASCADE");
-        when(cascadeOrgManager.listEffective(PLATFORM_ID)).thenReturn(List.of());
-        when(cascadeOrgManager.indexById(any())).thenReturn(Map.of());
-        when(cascadeOrgManager.listByPlatformId(PLATFORM_ID)).thenReturn(List.of(revoked));
-        when(cascadeChannelManager.listByPlatformId(PLATFORM_ID)).thenReturn(List.of(channel(ORG_SUB)));
+        /* 组织没进目录即已被阻断（本地停用或未发布），策略已由管理器折算成 reroutedLocalCodes 的有无 */
+        when(cascadeOrgManager.platformOrgView(PLATFORM_ID)).thenReturn(CascadePlatformOrgView.empty());
+        when(publishedAssetResolver.listChannels(PLATFORM_ID)).thenReturn(List.of(channel(ORG_SUB)));
 
         List<CascadeCatalogNode> nodes = assembler.assemble(PLATFORM_ID, PLATFORM_ID);
 
@@ -193,15 +218,11 @@ class CascadeCatalogAssemblerTest {
     }
 
     @Test
-    @DisplayName("组织取消同步但策略为 REROUTE 时，通道改挂域节点继续上报")
+    @DisplayName("阻断组织配了 REROUTE 时，通道改挂域节点继续上报")
     void revoked_org_with_reroute_policy_keeps_channels() {
-        CascadeOrgDTO revoked = org(2L, null, ORG_SUB, "已取消");
-        revoked.setEnabled(0);
-        revoked.setRevokePolicy("REROUTE");
-        when(cascadeOrgManager.listEffective(PLATFORM_ID)).thenReturn(List.of());
-        when(cascadeOrgManager.indexById(any())).thenReturn(Map.of());
-        when(cascadeOrgManager.listByPlatformId(PLATFORM_ID)).thenReturn(List.of(revoked));
-        when(cascadeChannelManager.listByPlatformId(PLATFORM_ID)).thenReturn(List.of(channel(ORG_SUB)));
+        when(cascadeOrgManager.platformOrgView(PLATFORM_ID))
+            .thenReturn(new CascadePlatformOrgView(List.of(), Set.of(ORG_SUB)));
+        when(publishedAssetResolver.listChannels(PLATFORM_ID)).thenReturn(List.of(channel(ORG_SUB)));
 
         List<CascadeCatalogNode> nodes = assembler.assemble(PLATFORM_ID, PLATFORM_ID);
 
@@ -251,6 +272,111 @@ class CascadeCatalogAssemblerTest {
         assertTrue(xml.contains("\n <CmdType>Catalog</CmdType>\n"), "除首行外每行一个前导空格");
         assertTrue(xml.contains("\n <Item>\n"), xml);
         assertTrue(xml.trim().endsWith("</Notify>"), xml);
+    }
+
+    @Test
+    @DisplayName("Parental 按节点类型：域/组织为 1，通道为 0")
+    void parental_follows_node_kind() {
+        List<CascadeCatalogNode> nodes = assembleTree();
+
+        assertEquals(1, nodes.get(0).parental(), "域节点是目录节点");
+        assertEquals(1, nodes.get(1).parental(), "组织节点是目录节点");
+        assertEquals(0, nodes.get(3).parental(), "通道不是目录节点，否则上级会把它当可点播设备");
+
+        String xml = assembler.renderNotify(DOMAIN_ID, "11449", nodes.size(), nodes);
+        assertEquals(3, countOccurrences(xml, "<Parental>1</Parental>"), xml);
+        assertEquals(1, countOccurrences(xml, "<Parental>0</Parental>"), xml);
+    }
+
+    @Test
+    @DisplayName("开启设备层时插入设备节点，未归属的通道默认挂到设备下")
+    void device_layer_inserts_device_nodes() {
+        when(cascadePlatformManager.getByPlatformId(PLATFORM_ID)).thenReturn(platform(1));
+        CascadePlatformOrgDTO top = platformOrg(1L, ORG_TOP, ORG_TOP, null, "一层", 1);
+        when(cascadeOrgManager.platformOrgView(PLATFORM_ID))
+            .thenReturn(new CascadePlatformOrgView(List.of(top), Set.of()));
+        when(publishedAssetResolver.listDevices(PLATFORM_ID)).thenReturn(List.of(device(ORG_TOP)));
+        when(publishedAssetResolver.listChannels(PLATFORM_ID)).thenReturn(List.of(channel(null)));
+
+        List<CascadeCatalogNode> nodes = assembler.assemble(PLATFORM_ID, PLATFORM_ID);
+
+        assertEquals(4, nodes.size(), "域 + 组织 + 设备 + 通道: " + nodes);
+        CascadeCatalogNode dev = nodes.get(2);
+        assertEquals(CascadeCatalogNode.Kind.DEVICE, dev.kind());
+        assertEquals(ORG_TOP, dev.parentId(), "设备挂在它归属的组织下");
+        assertEquals("ON", dev.status(), "在线状态取自本地设备");
+        assertEquals(1, dev.parental(), "设备是目录节点");
+        assertEquals("DEV1", nodes.get(3).parentId(), "通道自己没有归属时跟随设备");
+    }
+
+    @Test
+    @DisplayName("设备层关闭时不插设备节点，通道仍挂组织")
+    void device_layer_disabled_keeps_channels_under_org() {
+        CascadePlatformOrgDTO top = platformOrg(1L, ORG_TOP, ORG_TOP, null, "一层", 1);
+        when(cascadeOrgManager.platformOrgView(PLATFORM_ID))
+            .thenReturn(new CascadePlatformOrgView(List.of(top), Set.of()));
+        when(publishedAssetResolver.listDevices(PLATFORM_ID)).thenReturn(List.of(device(ORG_TOP)));
+        /* 发布层解析器会用设备归属回填 deviceOrgCode，这里直接给出解析结果 */
+        CascadeChannelDTO channel = channel(null);
+        channel.setDeviceOrgCode(ORG_TOP);
+        when(publishedAssetResolver.listChannels(PLATFORM_ID)).thenReturn(List.of(channel));
+
+        List<CascadeCatalogNode> nodes = assembler.assemble(PLATFORM_ID, PLATFORM_ID);
+
+        assertEquals(3, nodes.size(), "域 + 组织 + 通道，设备发布行被忽略: " + nodes);
+        assertTrue(nodes.stream().noneMatch(n -> n.kind() == CascadeCatalogNode.Kind.DEVICE));
+        assertEquals(ORG_TOP, nodes.get(2).parentId(), "无设备层时通道回落设备归属组织");
+    }
+
+    @Test
+    @DisplayName("设备归属组织不可见时设备节点不出现，其下通道一起消失")
+    void device_with_invisible_org_is_dropped() {
+        when(cascadePlatformManager.getByPlatformId(PLATFORM_ID)).thenReturn(platform(1));
+        when(cascadeOrgManager.platformOrgView(PLATFORM_ID)).thenReturn(CascadePlatformOrgView.empty());
+        when(publishedAssetResolver.listDevices(PLATFORM_ID)).thenReturn(List.of(device(ORG_SUB)));
+        CascadeChannelDTO channel = channel(null);
+        channel.setDeviceOrgCode(ORG_SUB);
+        when(publishedAssetResolver.listChannels(PLATFORM_ID)).thenReturn(List.of(channel));
+
+        List<CascadeCatalogNode> nodes = assembler.assemble(PLATFORM_ID, PLATFORM_ID);
+
+        assertEquals(1, nodes.size(), "组织 CASCADE：设备与通道都不能凭空出现: " + nodes);
+    }
+
+    @Test
+    @DisplayName("发布行 parent_key 命中时优先于本地结构推导")
+    void parent_key_override_wins() {
+        CascadePlatformOrgDTO top = platformOrg(1L, ORG_TOP, ORG_TOP, null, "一层", 1);
+        CascadePlatformOrgDTO sub = platformOrg(2L, ORG_SUB, ORG_SUB, ORG_TOP, "二层", 2);
+        when(cascadeOrgManager.platformOrgView(PLATFORM_ID))
+            .thenReturn(new CascadePlatformOrgView(List.of(top, sub), Set.of()));
+
+        CascadeChannelDTO channel = channel(ORG_SUB);
+        channel.setParentKey(ORG_TOP);
+        when(publishedAssetResolver.listChannels(PLATFORM_ID)).thenReturn(List.of(channel));
+
+        List<CascadeCatalogNode> nodes = assembler.assemble(PLATFORM_ID, PLATFORM_ID);
+
+        assertEquals(ORG_TOP, nodes.get(nodes.size() - 1).parentId(),
+            "同一通道在不同上级可以挂不同父节点，parent_key 优先");
+    }
+
+    @Test
+    @DisplayName("parent_key 指向不在该平台目录里的节点时回落本地结构，不造孤儿")
+    void parent_key_pointing_outside_catalog_falls_back() {
+        CascadePlatformOrgDTO top = platformOrg(1L, ORG_TOP, ORG_TOP, null, "一层", 1);
+        CascadePlatformOrgDTO sub = platformOrg(2L, ORG_SUB, ORG_SUB, ORG_TOP, "二层", 2);
+        when(cascadeOrgManager.platformOrgView(PLATFORM_ID))
+            .thenReturn(new CascadePlatformOrgView(List.of(top, sub), Set.of()));
+
+        CascadeChannelDTO channel = channel(ORG_SUB);
+        channel.setParentKey("34020000002150009999");
+        when(publishedAssetResolver.listChannels(PLATFORM_ID)).thenReturn(List.of(channel));
+
+        List<CascadeCatalogNode> nodes = assembler.assemble(PLATFORM_ID, PLATFORM_ID);
+
+        assertEquals(ORG_SUB, nodes.get(nodes.size() - 1).parentId(),
+            "目标节点不存在时只能回落本地归属，否则上级拿到一条挂不住的节点");
     }
 
     private int countOccurrences(String haystack, String needle) {

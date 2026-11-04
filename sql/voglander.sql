@@ -36,6 +36,7 @@ CREATE TABLE `tb_device`
     `keepalive_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '心跳时间',
     `server_ip`      varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '注册节点',
     `org_id`         bigint unsigned                                                DEFAULT NULL COMMENT '所属级联组织(tb_cascade_org.id)，空=未归组织',
+    `enabled`        tinyint(1)                                             NOT NULL DEFAULT '1' COMMENT '本地启用 1启用 0停用；停用后从所有上级平台消失，与在线状态 status 无关',
     `extend`         text COLLATE utf8mb4_bin COMMENT '扩展字段',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_device` (`device_id`) USING BTREE,
@@ -61,16 +62,23 @@ CREATE TABLE `tb_device_channel`
     `channel_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '通道Id',
     `device_id`   varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin        NOT NULL COMMENT '设备ID',
     `name`       varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '通道名称',
+    `org_id`     bigint unsigned                                                  DEFAULT NULL COMMENT '所属级联组织(tb_cascade_org.id)，空=跟随设备归属',
+    `enabled`    tinyint(1)                                             NOT NULL DEFAULT '1' COMMENT '本地启用 1启用 0停用；停用后从所有上级平台消失',
     `extend`      text CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '扩展字段',
     `last_seen_time` datetime                                                              DEFAULT NULL COMMENT '通道最近一次被目录/会话感知的时间',
     `status_source`  varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin                DEFAULT NULL COMMENT '当前 status 的来源：CATALOG / OFFLINE_CASCADE / SESSION / MANUAL / MISSING',
     `missing_count`  int                                                          NOT NULL DEFAULT '0' COMMENT '连续目录响应中未出现的次数',
+    `code`           varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin                DEFAULT NULL COMMENT '自己的码（本地码）；上级看到的是发布行的 publish_code',
     PRIMARY KEY (`id`),
     UNIQUE KEY `channel_id` (`channel_id`, `device_id`) USING BTREE,
     -- Phase 2a：复合 UNIQUE 最左前缀是 channel_id，无法支撑"按 device_id 查通道"，补单列索引
     KEY `idx_device_id` (`device_id`) USING BTREE,
     -- 1.0.4：cascadeOffline + 列表过滤 + 单调查询共用复合索引
-    KEY `idx_device_status` (`device_id`, `status`) USING BTREE
+    KEY `idx_device_status` (`device_id`, `status`) USING BTREE,
+    -- 1.10.2：通道按组织归属聚合/校验占用
+    KEY `idx_channel_org` (`org_id`) USING BTREE,
+    -- 1.10.3：按「自己的码」反查通道
+    KEY `idx_channel_code` (`code`) USING BTREE
 ) ENGINE = InnoDB
   AUTO_INCREMENT = 23
   DEFAULT CHARSET = utf8mb4
@@ -771,6 +779,15 @@ CREATE TABLE `tb_cascade_platform`
     `register_expires`   INT                                                   NOT NULL DEFAULT 3600 COMMENT '注册有效期(秒)',
     `charset`            VARCHAR(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT 'GB2312' COMMENT '字符集',
     `transport`          VARCHAR(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT 'UDP' COMMENT '传输协议',
+    `catalog_with_device_layer` TINYINT                                NOT NULL DEFAULT 0 COMMENT '目录是否带设备层 0=虚拟组织(通道直挂组织) 1=域/组织/设备/通道',
+    `code_province`      VARCHAR(2)  CHARACTER SET utf8mb4 COLLATE utf8mb4_bin  DEFAULT NULL COMMENT '平台编码规则-省编码(2位)',
+    `code_city`          VARCHAR(2)  CHARACTER SET utf8mb4 COLLATE utf8mb4_bin  DEFAULT NULL COMMENT '平台编码规则-市编码(2位)',
+    `code_county`        VARCHAR(4)  CHARACTER SET utf8mb4 COLLATE utf8mb4_bin  DEFAULT NULL COMMENT '平台编码规则-县区编码(4位)',
+    `code_industry`      VARCHAR(2)  CHARACTER SET utf8mb4 COLLATE utf8mb4_bin  DEFAULT NULL COMMENT '平台编码规则-行业编码(2位)',
+    `code_network`       VARCHAR(1)  CHARACTER SET utf8mb4 COLLATE utf8mb4_bin  DEFAULT NULL COMMENT '平台编码规则-网络标识(1位)',
+    `code_start_seq`     INT                                                    DEFAULT NULL COMMENT '平台编码规则-起始序号(6位)',
+    `code_rule_enabled`  TINYINT                                               NOT NULL DEFAULT 0 COMMENT '平台编码规则 0=未启用(沿用本地组织码与全局兜底) 1=按平台七段规则生成',
+    `publish_ancestors`  TINYINT                                               NOT NULL DEFAULT 0 COMMENT '发布策略 0=勾选组织时缺祖先即报错 1=自动补推缺失的祖先链',
     `extend`             TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '扩展字段(FastJSON2)',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_cascade_platform_id` (`platform_id`) USING BTREE
@@ -778,36 +795,6 @@ CREATE TABLE `tb_cascade_platform`
   AUTO_INCREMENT = 1
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_bin COMMENT ='级联上级平台表';
-
-
--- ----------------------------
--- Table structure for tb_cascade_channel  (级联上报通道)
--- ----------------------------
-DROP TABLE IF EXISTS `tb_cascade_channel`;
-CREATE TABLE `tb_cascade_channel`
-(
-    `id`                 BIGINT UNSIGNED                                       NOT NULL AUTO_INCREMENT,
-    `create_time`        DATETIME                                              NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    `update_time`        DATETIME                                              NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
-    `platform_id`        VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '上级平台ID',
-    `local_device_id`    VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '本地设备ID',
-    `local_channel_id`   VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '本地通道ID',
-    `cascade_channel_id` VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '上报给上级的通道ID(默认同local)',
-    `cascade_name`       VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin         DEFAULT NULL COMMENT '通道名称',
-    `cascade_org_id`     VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin          DEFAULT NULL COMMENT '所属上级组织编码(空=挂平台根节点)',
-    `enabled`            TINYINT                                               NOT NULL DEFAULT 1 COMMENT '1上报 0不上报',
-    `manufacturer`       VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin          DEFAULT NULL COMMENT '厂商(Hik/Dahua/Jovision)，空=按设备通道数据自动派生',
-    `model`              VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin         DEFAULT NULL COMMENT '设备型号，空=自动派生',
-    `address`            VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin         DEFAULT NULL COMMENT '安装地址，空=自动派生(GB28181 目录 Address)',
-    `ip_address`         VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin          DEFAULT NULL COMMENT '设备IP，空=自动派生(目录IP→源设备IP→设备表IP)',
-    `ptz_type`           TINYINT                                                        DEFAULT NULL COMMENT '摄像机类型 1球机 2半球 3枪机，空或0=自动派生(缺省枪机)',
-    PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_cascade_platform_local` (`platform_id`, `local_channel_id`) USING BTREE,
-    KEY `idx_cascade_channel_org` (`platform_id`, `cascade_org_id`) USING BTREE
-) ENGINE = InnoDB
-  AUTO_INCREMENT = 1
-  DEFAULT CHARSET = utf8mb4
-  COLLATE = utf8mb4_bin COMMENT ='级联上报通道表';
 
 
 -- ----------------------------
@@ -827,7 +814,6 @@ CREATE TABLE `tb_cascade_org`
     `org_name`       VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '组织名称',
     `sort_order`     INT                                                   NOT NULL DEFAULT 0 COMMENT '同级排序',
     `enabled`        TINYINT                                               NOT NULL DEFAULT 1 COMMENT '1有效 0停用(本地)；上报启停见 tb_cascade_publish',
-    `revoke_policy`  VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT 'CASCADE' COMMENT '取消同步时通道处置：CASCADE连带删除/ REROUTE上浮挂域节点',
     `code_province`  VARCHAR(2)  CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '编码规则-省编码(2位)',
     `code_city`      VARCHAR(2)  CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '编码规则-市编码(2位)',
     `code_county`    VARCHAR(4)  CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '编码规则-县区编码(4位)',
@@ -848,7 +834,7 @@ CREATE TABLE `tb_cascade_org`
 -- ----------------------------
 -- Table structure for tb_cascade_publish  (级联发布配置)
 -- 每个上级平台一套可见性视图；本地资产不绑定平台，推给哪个平台由本表表达
--- object_type: ORG=tb_cascade_org.id / DEVICE=tb_device.id / CHANNEL=tb_device_channel.id
+-- object_type: ORG=org_code / DEVICE=device_id / CHANNEL=device_id:channel_id
 -- ----------------------------
 DROP TABLE IF EXISTS `tb_cascade_publish`;
 CREATE TABLE `tb_cascade_publish`
@@ -858,8 +844,11 @@ CREATE TABLE `tb_cascade_publish`
     `update_time`   DATETIME                                              NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
     `platform_id`   VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '上级平台ID',
     `object_type`   VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT 'ORG/DEVICE/CHANNEL',
-    `object_id`     BIGINT UNSIGNED                                       NOT NULL COMMENT '本地对象ID',
+    `object_key`    VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '对象业务键：ORG=org_code / DEVICE=device_id / CHANNEL=device_id:channel_id',
+    `parent_key`    VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '该平台下的父节点业务键，空=按本地结构推导',
     `publish_code`  VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '上报编码(该平台)，空=沿用本地编码',
+    `code_source`         VARCHAR(8) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '编码来源 AUTO-规则生成并固化 MANUAL-人工填写，空=历史数据未标记',
+    `code_generated_time` DATETIME                                              DEFAULT NULL COMMENT '自动生成时间；人工填写为空',
     `publish_name`  VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '上报名称，空=用本地名称',
     `enabled`       TINYINT                                               NOT NULL DEFAULT 1 COMMENT '1上报 0不报',
     `sort_order`    INT                                                            DEFAULT NULL COMMENT '同级排序，空=用本地排序',
@@ -869,12 +858,17 @@ CREATE TABLE `tb_cascade_publish`
     `ip_address`    VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '目录元数据覆盖-IP',
     `ptz_type`      INT                                                   DEFAULT NULL COMMENT '目录元数据覆盖-摄像机类型',
     `civil_code`    VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '目录元数据覆盖-行政区划码',
-    `revoke_policy` VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '组织取消同步策略 CASCADE/REROUTE',
+    `revoke_policy` VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '本平台专用：该组织不上报时其下通道处置 CASCADE/REROUTE',
+    `device_key`         VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT 'CHANNEL 行冗余设备段，用于按设备过滤（object_key 是拼接键不能当查询条件）',
+    `last_push_time`     DATETIME                                              DEFAULT NULL COMMENT '最近一次向该平台推送的时间',
+    `last_push_status`   VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '最近一次推送结论 OK/FAILED/TIMEOUT/SKIPPED',
+    `last_push_message`  VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '最近一次推送失败原因',
     `extend`        TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '扩展字段(FastJSON2)',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_publish_object` (`platform_id`, `object_type`, `object_id`) USING BTREE,
+    UNIQUE KEY `uk_publish_object` (`platform_id`, `object_type`, `object_key`) USING BTREE,
     UNIQUE KEY `uk_publish_code` (`platform_id`, `publish_code`) USING BTREE,
-    KEY `idx_publish_type` (`platform_id`, `object_type`, `enabled`) USING BTREE
+    KEY `idx_publish_type` (`platform_id`, `object_type`, `enabled`) USING BTREE,
+    KEY `idx_publish_device` (`platform_id`, `object_type`, `device_key`) USING BTREE
 ) ENGINE = InnoDB
   AUTO_INCREMENT = 1
   DEFAULT CHARSET = utf8mb4

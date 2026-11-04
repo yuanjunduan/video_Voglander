@@ -21,17 +21,16 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.util.ReflectionTestUtils;
 
 /**
- * D3 红线测试：把 SQLite 全量脚本和运行时 initializer 的 29 表契约钉成 CI 失败。
- * 这一差异钉成 CI 失败。
+ * D3 红线测试：把 SQLite 全量脚本和运行时 initializer 的 28 表契约钉成 CI 失败。
  * <p>
  * 纯单元测试（不起 Spring 上下文）：对一个全新临时 SQLite 文件运行<b>真实</b>的
  * {@link SqliteSchemaInitializer#initSchemaIfEmpty()}（加载 classpath {@code db/voglander-sqlite.sql}），
  * 断言：
  * <ol>
- *   <li>建出全 29 张 {@code tb_} 业务表；</li>
+ *   <li>建出全 28 张 {@code tb_} 业务表；</li>
  *   <li>admin 种子（id=1）存在；</li>
- *   <li>建表后校验生效：sentinel 在但表残缺时 fail-fast，不留隐性坏库；</li>
- *   <li>已初始化库（sentinel 在且表齐全）二次调用直接跳过，幂等。</li>
+ *   <li>库非空但表残缺时 fail-fast，且<b>绝不</b>跑建表脚本——那会把现场数据清掉；</li>
+ *   <li>1.10.2 契约：建表脚本不再建 {@code tb_cascade_channel}，老表由迁移器退场。</li>
  * </ol>
  *
  * @author luna
@@ -39,8 +38,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 @DisplayName("D3 — SQLite clone-and-run 建表完整性")
 class SqliteSchemaInitializerTest {
 
-    /** 脚本权威 tb_ 业务表数（sequence 表不在 tb_% 过滤内） */
-    private static final int EXPECTED_TABLE_COUNT = 29;
+    /** 脚本权威 tb_ 业务表数（sequence 表不在 tb_% 过滤内；1.10.2 通道老表退场后为 28） */
+    private static final int EXPECTED_TABLE_COUNT = 28;
 
     private Path             dbFile;
     private DataSource       dataSource;
@@ -91,8 +90,8 @@ class SqliteSchemaInitializerTest {
     }
 
     @Test
-    @DisplayName("全新空库 → 真实建表流程 → 建出全 29 张 tb_ 表")
-    void freshDb_shouldBuildAll29Tables() throws Exception {
+    @DisplayName("全新空库 → 真实建表流程 → 建出全 28 张 tb_ 表")
+    void freshDb_shouldBuildAllTables() throws Exception {
         newInitializer(dataSource).initSchemaIfEmpty();
 
         int actual = countUserTables(dataSource);
@@ -102,14 +101,14 @@ class SqliteSchemaInitializerTest {
     }
 
     @Test
-    @DisplayName("全新空库 → 建表序列最后一张 tb_cascade_channel 必须存在")
+    @DisplayName("全新空库 → 建表序列最后一张 tb_image_collection_config 必须存在，且老通道表已不再建")
     void freshDb_shouldBuildLastTable() throws Exception {
         newInitializer(dataSource).initSchemaIfEmpty();
 
-        assertTrue(tableExists(dataSource, "tb_cascade_channel"),
-            "建表序列真正最后一张表 tb_cascade_channel 缺失 → 脚本中断");
-        assertTrue(tableExists(dataSource, "tb_cascade_platform"),
-            "倒数第二张 tb_cascade_platform 缺失 → 脚本中断");
+        assertTrue(tableExists(dataSource, "tb_image_collection_config"),
+            "建表序列真正最后一张表 tb_image_collection_config 缺失 → 脚本中断");
+        assertTrue(!tableExists(dataSource, "tb_cascade_channel"),
+            "1.10.2 契约：建表脚本不应再建 tb_cascade_channel，通道目录唯一来源是 tb_cascade_publish");
     }
 
     @Test
@@ -126,7 +125,26 @@ class SqliteSchemaInitializerTest {
     }
 
     @Test
-    @DisplayName("已初始化库（sentinel 在且表齐全）→ 二次调用跳过，幂等")
+    @DisplayName("全新空库 → tb_cascade_platform 带上 1.10.3 的 8 个编码规则列")
+    void freshDb_shouldExposePlatformCodingColumns() throws Exception {
+        newInitializer(dataSource).initSchemaIfEmpty();
+
+        /* 建表脚本与 SqliteCascadeCodingSchemaMigrator 必须同形：脚本缺列空库能起来但读写平台 500，
+           迁移器缺列则老库升级后只是表面上能启动 */
+        String[] columns = {"code_province", "code_city", "code_county", "code_industry",
+            "code_network", "code_start_seq", "code_rule_enabled", "publish_ancestors"};
+        for (String column : columns) {
+            String sql = "SELECT count(*) FROM pragma_table_info('tb_cascade_platform') WHERE name='" + column + "'";
+            try (Connection conn = dataSource.getConnection();
+                Statement stmt = conn.createStatement();
+                ResultSet rs = stmt.executeQuery(sql)) {
+                assertTrue(rs.next() && rs.getInt(1) == 1, "建表脚本缺少 tb_cascade_platform." + column);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("已初始化库（表齐全）→ 二次调用跳过，幂等")
     void alreadyInitialized_shouldSkip() throws Exception {
         SqliteSchemaInitializer initializer = newInitializer(dataSource);
         initializer.initSchemaIfEmpty();
@@ -137,36 +155,31 @@ class SqliteSchemaInitializerTest {
         assertEquals(afterFirst, countUserTables(dataSource), "已初始化库二次调用应幂等跳过");
     }
 
+    /**
+     * 库非空但表残缺 → fail-fast，且<b>一行数据都不准丢</b>。
+     *
+     * <p>这是 1.10.2 把哨兵从「某张特定表」改成「库里有没有 tb_ 表」之后最重要的红线：
+     * 不再有单表哨兵后，就不存在「合法老库缺了哨兵表被误判为空库」的情形，而一旦误判，
+     * 空库分支会执行含 {@code DROP TABLE} 的全量脚本，把现场数据清掉。
+     */
     @Test
-    @DisplayName("半成品坏库（sentinel 在但表残缺）→ fail-fast 抛异常，不静默放过")
-    void halfBuiltDb_shouldFailFast() throws Exception {
-        // 构造「隐性坏库」：只建出 sentinel(tb_cascade_channel) 但缺其余表
-        try (Connection conn = dataSource.getConnection();
-            Statement stmt = conn.createStatement()) {
-            stmt.execute("CREATE TABLE tb_cascade_channel (id INTEGER PRIMARY KEY)");
-        }
-
-        // 既然 sentinel 已在，initSchemaIfEmpty 会校验旧版完整性 → 表数<21 必须 fail-fast
-        SqliteSchemaInitializer initializer = newInitializer(dataSource);
-        assertThrows(IllegalStateException.class, initializer::initSchemaIfEmpty,
-            "sentinel 在但 tb_ 表数<21 的残缺库应 fail-fast，绝不留隐性坏库");
-    }
-
-    @Test
-    @DisplayName("旧坏库自愈（sentinel 改判核心）：旧 tb_user 在但末表缺失 → 重新建表至 29 张")
-    void oldBrokenStateWithLegacySentinel_shouldSelfHeal() throws Exception {
-        // 模拟 D3 历史坏库：旧 sentinel tb_user 已建（建表序列靠前），但脚本在末尾中断，
-        // 真正最后一张 tb_cascade_channel 缺失。旧实现以 tb_user 为 sentinel 会误判已初始化、永久残缺。
+    @DisplayName("库非空但表残缺 → fail-fast，且不跑建表脚本（数据一行不丢）")
+    void nonEmptyIncompleteDb_shouldFailFastWithoutWiping() throws Exception {
         try (Connection conn = dataSource.getConnection();
             Statement stmt = conn.createStatement()) {
             stmt.execute("CREATE TABLE tb_user (id INTEGER PRIMARY KEY, username VARCHAR(64))");
+            stmt.execute("INSERT INTO tb_user(id, username) VALUES (7, 'keep-me')");
         }
 
-        // 新 sentinel = tb_cascade_channel 缺失 → 应重新执行建表 → 自愈到 29 张
-        newInitializer(dataSource).initSchemaIfEmpty();
+        SqliteSchemaInitializer initializer = newInitializer(dataSource);
+        assertThrows(IllegalStateException.class, initializer::initSchemaIfEmpty,
+            "库非空但 tb_ 表数<21 的残缺库应 fail-fast，而不是当空库重建");
 
-        assertEquals(EXPECTED_TABLE_COUNT, countUserTables(dataSource),
-            "旧坏库（仅 tb_user 在）应被 sentinel 改判识别并重建至 29 张");
-        assertTrue(tableExists(dataSource, "tb_cascade_channel"), "自愈后末表 tb_cascade_channel 应存在");
+        try (Connection conn = dataSource.getConnection();
+            Statement stmt = conn.createStatement();
+            ResultSet rs = stmt.executeQuery("SELECT username FROM tb_user WHERE id=7")) {
+            assertTrue(rs.next(), "建表脚本带 DROP TABLE，绝不能在半途库上执行——原有数据必须还在");
+            assertEquals("keep-me", rs.getString(1));
+        }
     }
 }

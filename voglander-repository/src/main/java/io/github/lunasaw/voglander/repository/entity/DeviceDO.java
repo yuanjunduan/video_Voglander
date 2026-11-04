@@ -48,6 +48,22 @@ public class DeviceDO implements Serializable {
      * 协议类型 {@link DeviceAgreementEnum}
      */
     private Integer           type;
+
+    /**
+     * 所属级联组织（{@code tb_cascade_org.id}），空 = 未归组织，上报时挂域节点。
+     *
+     * <p>归属只来自本地：上级要什么树不改变这张表的取值，按平台的差异走 {@code tb_cascade_publish.parent_key}。
+     */
+    private Long              orgId;
+
+    /**
+     * 本地启用：1 启用、0 停用。
+     *
+     * <p>与 {@link #status} 是两件事：{@code status=0} 是“掉线”，目录里仍要出现（Status 报 OFF）；
+     * {@code enabled=0} 是“不再上报了”，要从所有上级平台消失。
+     */
+    private Integer           enabled;
+
     // 扩展字段
     private String            extend;
 
