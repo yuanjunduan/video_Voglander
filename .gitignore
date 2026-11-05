@@ -54,3 +54,7 @@ media/**/MediaServer
 .superpowers/*
 
 **/logs
+
+### 本地临时工作区(前端 staging 中转 / 探针脚本, 不入库) ###
+/.fe-staging/
+/.probe/
