@@ -3,7 +3,7 @@
 > **用途**：新会话接管这个仓库时，先读这一份，避免从零重建认知。
 > **维护约定**：每次完成一轮需求后，把「新增的结构约束」「踩过的坑」「未闭环事项」补进来；
 > 与代码冲突时以代码为准，并回来修正本文。
-> **最后更新**：2026-10-30（HEAD = `bde8bd4` fix(cascade): 上报前校验整条组织链在上级目录可见）
+> **最后更新**：2026-11-05（HEAD = `29fe552` feat(cascade): 本端注册身份拆为独立客户端表，平台改存 clientRefId）
 
 ---
 
@@ -250,6 +250,7 @@ npx vitest run apps/web-antd/src/views/cascade
 | 18 | 撤销逻辑把 SQLite 整库写锁占住 10s | 同步 SIP 等待困在事务里；撤销放事务外，本地删除用 `TransactionTemplate` |
 | 19 | 页面删除失败只看到「操作失败」，看不出哪个平台没确认 | `deleteOne/deleteBatch` 里的 `catch (IllegalArgumentException) { throw e; }` 不能省，否则撤销原因会被洗成通用错误码；全局 `errorMessageResponseInterceptor` 已自动 `message.error` 后端 `message`，页面不要再重复弹一次 |
 | 20 | 平台表又冒出 `local_*` 列 / 注册身份与页面不一致 | 本端身份只在 `tb_cascade_client`（见 4.6）；平台侧只存 `client_ref_id`，`localClientId/localIp/localPort` 是派生值 |
+| 21 | 新菜单页「进不去」，按钮却挂在别的页面下 | 菜单 `id` 撞车：`INSERT OR IGNORE` 遇主键冲突整行被静默丢弃，按钮因 `id` 不撞而建出来。新增菜单前先在三份初始化 SQL 里 grep 目标 id；已发生过的两处：`604`（1.0.13 级联运行状态）、`605`（1.10.5 本端客户端） |
 
 ---
 
@@ -271,6 +272,10 @@ npx vitest run apps/web-antd/src/views/cascade
 - 用户在更早一轮挂起的人工动作：向海康发一次 `DEL` 以重建通道 `34020000001320000007`（未执行）。
 - `.fe-staging/`、`.probe/` 长期以未跟踪状态留在工作区，未加入 `.gitignore`（待用户决定）。
 - `CascadeMediaInviteListenerTest.reap_idleTimeout_stopsPush` 的偶发失败未定位（疑定时器抖动）。
+- 1.10.5 本端客户端拆分（`29fe552`）**未做真机注册验证**：改 IP 会重建引用平台的注册任务，需对着真实上级确认
+  「改一次客户端 IP → 所有引用它的平台自动用新地址重新 REGISTER」，以及页面菜单 605 登录后可见。
+- 工作区两个 `test-app.db` 已手工改成菜单 605（若重建库则自动带）；线上 MySQL/PG 需按
+  `sql/migration/{mysql,postgresql}/1.10.5-cascade-client.sql` 手工执行。
 
 ---
 
