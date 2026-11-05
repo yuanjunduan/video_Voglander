@@ -231,7 +231,7 @@ npx vitest run apps/web-antd/src/views/cascade
 
 | # | 现象 | 根因 / 规避 |
 | --- | --- | --- |
-| 1 | Lombok 全模块「找不到符号」 | JAVA_HOME 没指向 `C:\soft\jdk21` |
+| 1 | Lombok 全模块「找不到符号」 | JAVA_HOME 没指向 JDK17/21。机器上装到 jdk25 时同样全量报错（Lombok 注解处理失效，连 `log` 和 `@Data` 的 getter 都找不到），构建前先 `$env:JAVA_HOME='C:\soft\jdk17'` |
 | 2 | `-pl voglander-web` 跑测试报 `NoClassDefFound` | 少了 `-am`，用了本地仓库陈旧 jar |
 | 3 | PowerShell 里 mvn 参数报错 | 含点号/逗号参数整体加引号 |
 | 4 | `mvn install` 失败 | gpg 签名，改用 `compile` / `test` |
@@ -253,6 +253,7 @@ npx vitest run apps/web-antd/src/views/cascade
 | 20 | 平台表又冒出 `local_*` 列 / 注册身份与页面不一致 | 本端身份只在 `tb_cascade_client`（见 4.6）；平台侧只存 `client_ref_id`，`localClientId/localIp/localPort` 是派生值 |
 | 21 | 新菜单页「进不去」，按钮却挂在别的页面下 | 菜单 `id` 撞车：`INSERT OR IGNORE` 遇主键冲突整行被静默丢弃，按钮因 `id` 不撞而建出来。新增菜单前先在三份初始化 SQL 里 grep 目标 id；已发生过的两处：`604`（1.0.13 级联运行状态）、`605`（1.10.5 本端客户端） |
 | 22 | 执行合并脚本报 `ERROR 1093` 或存储过程被拆碎 | `1.10.0-upgrade-from-1.0.9.sql` 含 `DELIMITER $$`，简单 SQL 切分器（JDBC script runner）会把过程体拆断，必须用支持 `DELIMITER` 的客户端；其中 `tb_menu` 同表子查询已改为自连接。整支脚本**只能对 1.0.9 基线库跑一次**（MySQL 8 不支持 `ADD COLUMN IF NOT EXISTS`） |
+| 23 | 新增 RTSP/ONVIF 设备后「没有通道」，日志里也没有 `channel.discover` | 这类设备的通道不在平台侧生成，只能由 `POST /deviceChannel/discover/{deviceId}` 读设备管理面台账；而该按钮在通道页，通道页入口是设备列表里 `channelCount>0` 的钻取链接 → 0 通道时进不去，形成死锁。现已两头修：`DeviceController#insert` 对 type=3/4 异步触发一次发现（失败只 warn），前端 0 也渲染成可点链接。诊断时先 `curl --digest -u <user>:<pwd> http://<ip>/ISAPI/ContentMgmt/InputProxy/channels` 确认设备侧台账是否可读 |
 
 ---
 
@@ -272,7 +273,7 @@ npx vitest run apps/web-antd/src/views/cascade
 - 上级不可达时删除会被挡住（严格阻断是用户定的口径）；批删跨设备只能前端逐条 `deleteOne`。
 - `bde8bd4` 里的可见性校验与页面列**尚未重启后端验证**；验证点：停报上级组织后，在子组织下点通道「恢复上报」应报「级联组织【X】处于停报状态，请先恢复它」。
 - 用户在更早一轮挂起的人工动作：向海康发一次 `DEL` 以重建通道 `34020000001320000007`（未执行）。
-- `.fe-staging/`、`.probe/` 长期以未跟踪状态留在工作区，未加入 `.gitignore`（待用户决定）。
+- 新增设备自动补通道（`3bb7471`）**未在运行实例上验证**：后端 PID 需重启后才生效，验证点见提交说明（新增 RTSP 设备 → 日志出 `[channel.discover] 同步完成` → 列表通道数由 0 变 N）。
 - `CascadeMediaInviteListenerTest.reap_idleTimeout_stopsPush` 的偶发失败未定位（疑定时器抖动）。
 - 1.10.5 本端客户端拆分（`29fe552`）**未做真机注册验证**：改 IP 会重建引用平台的注册任务，需对着真实上级确认
   「改一次客户端 IP → 所有引用它的平台自动用新地址重新 REGISTER」，以及页面菜单 605 登录后可见。
