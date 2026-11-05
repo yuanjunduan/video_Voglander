@@ -33,6 +33,7 @@ import io.github.lunasaw.voglander.manager.manager.DeviceChannelManager;
 import io.github.lunasaw.voglander.manager.manager.DeviceManager;
 import io.github.lunasaw.voglander.manager.service.DeviceChannelService;
 import io.github.lunasaw.voglander.service.device.DeviceChannelDiscoveryService;
+import io.github.lunasaw.voglander.service.device.dto.ChannelSyncResultDTO;
 import io.github.lunasaw.voglander.web.api.channel.assembler.DeviceChannelWebAssembler;
 
 /**
@@ -149,6 +150,25 @@ class DeviceChannelControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.data.orgId").value(DEVICE_ORG))
             .andExpect(jsonPath("$.data.orgName").value("二层"));
+    }
+
+    @Test
+    @DisplayName("同步回包：回包里的通道列表也按设备组织回填，不另开一套口径")
+    void discover_channels_follow_device_org() throws Exception {
+        ChannelSyncResultDTO syncResult = new ChannelSyncResultDTO();
+        syncResult.setDeviceId(DEVICE_ID);
+        syncResult.setPersisted(true);
+        syncResult.setDiscovered(1);
+        syncResult.setChannels(List.of(channel(STALE_CHANNEL_ORG)));
+        when(deviceChannelDiscoveryService.sync(DEVICE_ID)).thenReturn(syncResult);
+        when(deviceManager.mapOrgIdByDeviceIds(argThat(ids -> ids.contains(DEVICE_ID))))
+            .thenReturn(Map.of(DEVICE_ID, DEVICE_ORG));
+        when(cascadeOrgManager.nameIndexById()).thenReturn(Map.of(DEVICE_ORG, "二层"));
+
+        mvc.perform(post("/api/v1/deviceChannel/discover/" + DEVICE_ID))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.channels[0].orgId").value(DEVICE_ORG))
+            .andExpect(jsonPath("$.data.channels[0].orgName").value("二层"));
     }
 
     // ------------------------------------------------------------------ 夹具

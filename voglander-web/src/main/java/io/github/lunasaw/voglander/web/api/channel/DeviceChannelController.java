@@ -231,7 +231,10 @@ public class DeviceChannelController {
             : deviceChannelDiscoveryService.sync(deviceId, timeoutMs);
         // 与 probe-rtsp 一致：请求本身成功受理即 200，成败看 Vo 里的 persisted/failureReason。
         // 只有"设备不存在""协议不支持"这类调用方问题才抛 ServiceException 交给全局拦截器。
-        return AjaxResult.success(deviceChannelWebAssembler.syncResultToVo(result));
+        ChannelSyncResultVO vo = deviceChannelWebAssembler.syncResultToVo(result);
+        /* 回包里也带通道列表：归属同样只能来自设备，不能因为它是同步结果就另开一套口径 */
+        fillDeviceOrg(vo.getChannels());
+        return AjaxResult.success(vo);
     }
 
     @GetMapping("/list/{deviceId}")
