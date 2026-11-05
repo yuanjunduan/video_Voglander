@@ -36,9 +36,12 @@ import io.github.lunasaw.voglander.support.UniqueKeyFactory;
 /**
  * 「设备 / 通道改归属组织」的<b>发事件</b>侧验证。
  *
- * <p><b>只钉发与不发</b>：两个管理器都在高频路径上（心跳、入站响应回填都走
+ * <p><b>只钉发与不发</b>：设备管理器在高频路径上（心跳、入站响应回填都走
  * {@code updateById}），只要归属没变就一条事件都不能发；变了则必须带上变更前后的组织主键，
  * 否则监听器算不出旧父节点。旧父节点如何还原由 {@code CascadePlacementChangeListenerTest} 覆盖。
+ *
+ * <p><b>通道不再发事件</b>：通道是设备的子资源，没有可单独挪的位置。入参里的 {@code orgId}
+ * 会被摘掉并记一条 WARN——这里把它钉住，免得哪天内应旧客户端请求又把两套归属捡回来。
  *
  * <p><b>为什么用 {@code NOT_SUPPORTED}</b>：与 {@code CascadeOrgMoveEventTest} 同理——监听器挂在
  * {@code AFTER_COMMIT}，套在测试基类的回滚事务里永远不会执行；这里虽然只断言发送侧，但让整条链路
@@ -139,10 +142,18 @@ class CascadePlacementChangeEventTest extends BaseTest {
     // ------------------------------------------------------------------ 通道
 
     @Test
-    @DisplayName("通道换组织：发出 CHANNEL 事件，业务键是 deviceId:channelId")
-    void channel_org_change_publishes_event() {
+    @DisplayName("通道改 orgId：不发事件，也不写库（存量脏值原样保留）")
+    void channel_org_change_publishes_nothing_and_is_not_written() {
         createDevice(ORG_A);
         String channelId = createChannel("前门");
+        DeviceChannelDO created = findChannel(channelId);
+        assertNull(created.getOrgId(), "新通道不再带组织归属");
+
+        /* 模拟停用独立归属之前留下的脏值：写入侧不该再去动它，也不该按它算位置 */
+        DeviceChannelDO dirty = new DeviceChannelDO();
+        dirty.setId(created.getId());
+        dirty.setOrgId(ORG_A);
+        deviceChannelService.updateById(dirty);
 
         DeviceChannelDTO query = new DeviceChannelDTO();
         query.setChannelId(channelId);
@@ -150,10 +161,9 @@ class CascadePlacementChangeEventTest extends BaseTest {
         patch.setOrgId(ORG_B);
         deviceChannelManager.update(query, patch);
 
-        LocalCascadePlacementChangeEvent event = singleEvent(PublishKeys.channel(deviceId, channelId));
-        assertEquals(PlacementScope.CHANNEL, event.getScope());
-        assertNull(event.getPreviousOrgId(), "通道原本未归组织，新归属是 B");
-        assertEquals(ORG_B, event.getCurrentOrgId());
+        assertTrue(eventsOf(PublishKeys.channel(deviceId, channelId)).isEmpty(),
+            "通道跟着设备走，没有可以单独挪的位置");
+        assertEquals(ORG_A, findChannel(channelId).getOrgId(), "入参里的 orgId 被摘掉，不能覆盖存量值");
     }
 
     @Test
@@ -196,6 +206,13 @@ class CascadePlacementChangeEventTest extends BaseTest {
         channel.setName(name);
         deviceChannelManager.add(channel);
         return channelId;
+    }
+
+    private DeviceChannelDO findChannel(String channelId) {
+        LambdaQueryWrapper<DeviceChannelDO> qw = new LambdaQueryWrapper<>();
+        qw.eq(DeviceChannelDO::getDeviceId, deviceId);
+        qw.eq(DeviceChannelDO::getChannelId, channelId);
+        return deviceChannelService.getOne(qw);
     }
 
     private List<LocalCascadePlacementChangeEvent> eventsOf(String objectKey) {

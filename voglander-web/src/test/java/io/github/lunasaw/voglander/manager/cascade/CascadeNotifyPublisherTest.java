@@ -225,7 +225,9 @@ class CascadeNotifyPublisherTest {
 
         CascadeChannelDTO ch = channel(pf, "LOCAL01", "CASCADE01");
         ch.setEnabled(1);
+        /* 父节点由设备组织推导：cascadeOrgId 只对外展示，不参与位置解析 */
         ch.setCascadeOrgId("34020000002150000001");
+        ch.setDeviceOrgCode("34020000002150000001");
         when(publishedAssetResolver.listChannels(pf)).thenReturn(List.of(ch));
 
         try (MockedStatic<SipRequestBuilderFactory> factoryMock = mockStatic(SipRequestBuilderFactory.class);

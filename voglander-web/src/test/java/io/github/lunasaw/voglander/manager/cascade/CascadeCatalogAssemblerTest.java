@@ -105,6 +105,13 @@ class CascadeCatalogAssemblerTest {
         return dto;
     }
 
+    /**
+     * 一条通道：{@code orgCode} 是它在目录里归的组织。
+     *
+     * <p>通道没有独立归属，发布层解析器把两个字段填成同一个设备组织编码（{@code cascadeOrgId}
+     * 是对外口径，{@code deviceOrgCode} 是父节点解析的输入），夹具里保持一致，
+     * 免得用例在「只设一个」时测出与真实数据不同的行为。
+     */
     private CascadeChannelDTO channel(String orgCode) {
         CascadeChannelDTO dto = new CascadeChannelDTO();
         dto.setPlatformId(PLATFORM_ID);
@@ -113,6 +120,7 @@ class CascadeCatalogAssemblerTest {
         dto.setCascadeChannelId(CHANNEL_ID);
         dto.setCascadeName("前门");
         dto.setCascadeOrgId(orgCode);
+        dto.setDeviceOrgCode(orgCode);
         dto.setEnabled(1);
         return dto;
     }
@@ -344,8 +352,8 @@ class CascadeCatalogAssemblerTest {
     }
 
     @Test
-    @DisplayName("通道自身组织优先于设备节点，不会被设备层劫持")
-    void channel_own_org_wins_over_device_node() {
+    @DisplayName("通道行上残留的组织被忽略：位置只由设备决定，挂到设备节点下")
+    void channel_stale_org_is_ignored_under_device_node() {
         when(cascadePlatformManager.getByPlatformId(PLATFORM_ID)).thenReturn(platform(1));
         CascadePlatformOrgDTO top = platformOrg(1L, ORG_TOP, ORG_TOP, null, "一层", 1);
         CascadePlatformOrgDTO sub = platformOrg(2L, ORG_SUB, ORG_SUB, ORG_TOP, "二层", 2);
@@ -353,6 +361,7 @@ class CascadeCatalogAssemblerTest {
             .thenReturn(new CascadePlatformOrgView(List.of(top, sub), Set.of()));
         when(publishedAssetResolver.listDevices(PLATFORM_ID)).thenReturn(List.of(device(ORG_TOP)));
 
+        /* 历史脏值：通道行上还留着 ORG_SUB，但设备在 ORG_TOP */
         CascadeChannelDTO channel = channel(ORG_SUB);
         channel.setDeviceOrgCode(ORG_TOP);
         when(publishedAssetResolver.listChannels(PLATFORM_ID)).thenReturn(List.of(channel));
@@ -360,15 +369,15 @@ class CascadeCatalogAssemblerTest {
         List<CascadeCatalogNode> nodes = assembler.assemble(PLATFORM_ID, PLATFORM_ID);
 
         CascadeCatalogNode ch = nodes.get(nodes.size() - 1);
-        assertEquals(ORG_SUB, ch.parentId(),
-            "挂载位置只看本地归属，设备节点不能把已归属的通道拉走: " + ch);
+        assertEquals("DEV1", ch.parentId(),
+            "通道没有自己的组织，残留的 cascadeOrgId 不能把它从设备节点下拉走: " + ch);
     }
 
     @Test
-    @DisplayName("设备节点被丢弃时，仍有可见归属的通道照常上报")
-    void channel_survives_missing_device_node() {
+    @DisplayName("设备节点被丢弃时，其下通道一起消失")
+    void channel_follows_dropped_device_node() {
         when(cascadePlatformManager.getByPlatformId(PLATFORM_ID)).thenReturn(platform(1));
-        /* 设备所属的 ORG_TOP 不在该平台目录里 → 设备节点被丢掉，但通道自己的 ORG_SUB 在 */
+        /* 设备所属的 ORG_TOP 不在该平台目录里 → 设备节点被丢掉；通道行上残留的 ORG_SUB 不作数 */
         CascadePlatformOrgDTO sub = platformOrg(2L, ORG_SUB, ORG_SUB, null, "二层", 1);
         when(cascadeOrgManager.platformOrgView(PLATFORM_ID))
             .thenReturn(new CascadePlatformOrgView(List.of(sub), Set.of()));
@@ -380,9 +389,9 @@ class CascadeCatalogAssemblerTest {
 
         List<CascadeCatalogNode> nodes = assembler.assemble(PLATFORM_ID, PLATFORM_ID);
 
-        assertEquals(3, nodes.size(), "域 + ORG_SUB + 通道，设备节点被丢弃: " + nodes);
-        assertTrue(nodes.stream().noneMatch(n -> n.kind() == CascadeCatalogNode.Kind.DEVICE));
-        assertEquals(ORG_SUB, nodes.get(2).parentId(), "通道自己的归属可见就不该跟着设备一起消失");
+        assertEquals(2, nodes.size(), "域 + ORG_SUB；设备不可见，通道跟着消失: " + nodes);
+        assertTrue(nodes.stream().noneMatch(n -> n.kind() == CascadeCatalogNode.Kind.CHANNEL),
+            "通道没有可以幸存的位置");
     }
 
     private int countOccurrences(String haystack, String needle) {

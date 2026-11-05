@@ -99,32 +99,23 @@ public final class CascadePlacementIndex {
     }
 
     /**
-     * 通道挂到哪个节点下（四级解析，前一级不可用才看下一级）。
+     * 通道挂到哪个节点下（三级解析，前一级不可用才看下一级）。
      *
      * <ol>
-     *   <li>通道<b>自己</b>归属的组织可见 → 组织节点</li>
      *   <li>设备已发布且设备层开启 → 设备节点</li>
      *   <li>设备归属的组织可见 → 组织节点（无设备层时的常规归宿）</li>
      *   <li>都不行：归属组织配了 {@code REROUTE} → 域节点；无归属 → 域节点；否则丢弃</li>
      * </ol>
      *
-     * <p>第 1 级一旦命中就不再看设备层：通道显式直挂组织是业务分组意图，
-     * 开了设备层不能把它悄悄挪到设备下面。组织不可见时也不回落到设备，
-     * 而是按该组织的策略处理——否则用户停用一个组织，其下通道会从那个组织“搬家”到设备层。
-     *
-     * <p><b>没有「发布行指定父节点」这一级</b>：那个覆盖曾允许同一通道在不同上级挂不同父节点，
-     * 实际用起来必然出现「改了本地组织、上级目录不动」的错位（快照是增量 upsert，旧位置不会自己消失），
-     * 且改挂后没有任何报文能让上级重建父子关系。目录结构现在只有本地归属一个真相。
+     * <p><b>通道没有自己的组织</b>：通道是设备的子资源，位置只由设备决定。通道表上的
+     * {@code org_id} 已停写停读——两套归属并存时，通道自己那份一旦生效就会把节点从设备节点下
+     * 挪到组织节点下，「组织 → 设备 → 通道」的形态当场断裂，而页面上看不出任何异常。
      *
      * @return 父节点编码；返回 null 表示该通道不上报
      */
     public String resolveChannelParent(CascadeChannelDTO channel) {
         if (channel == null) {
             return null;
-        }
-        String ownOrg = StringUtils.trimToNull(channel.getCascadeOrgId());
-        if (ownOrg != null) {
-            return visibleOrPolicy(ownOrg, channel.getCascadeChannelId());
         }
         String deviceCode = deviceCodeByLocal.get(channel.getLocalDeviceId());
         if (deviceCode != null) {
@@ -134,7 +125,7 @@ public final class CascadePlacementIndex {
         if (deviceOrg != null) {
             return visibleOrPolicy(deviceOrg, channel.getCascadeChannelId());
         }
-        /* 既无自身归属也无设备归属：挂域节点是允许的（早期行为已如此，上级能看到通道） */
+        /* 设备也没有归属：挂域节点是允许的（早期行为已如此，上级能看到通道） */
         return domainId;
     }
 

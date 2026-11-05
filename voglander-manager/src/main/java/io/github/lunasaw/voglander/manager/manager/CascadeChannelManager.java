@@ -18,6 +18,7 @@ import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.Publi
 import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.PublishObjectType;
 import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
 import io.github.lunasaw.voglander.manager.code.CascadeCodeResolver;
+import io.github.lunasaw.voglander.manager.domaon.dto.DeviceDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgView;
@@ -33,9 +34,10 @@ import lombok.extern.slf4j.Slf4j;
  * 收敛后本类只读写 {@code tb_cascade_publish}，名称、归属、本地启停、元数据全部由
  * {@link CascadePublishedAssetResolver} 从本地资产表派生，不再维护第二份真相。
  *
- * <p><b>组织归属只有一份</b>：{@code id} 是发布行主键，{@code localDeviceId/localChannelId} 是本地资产标识，
- * {@code cascadeOrgId} 是通道在本地的组织归属。目录里挂在哪个父节点完全由这份归属（以及设备的组织）
- * 推导，不再保存「按平台的父节点覆盖」——同一通道推给 N 个上级时结构一致。
+ * <p><b>组织归属只有一份，而且在设备上</b>：{@code id} 是发布行主键，{@code localDeviceId/localChannelId} 是本地资产标识，
+ * {@code cascadeOrgId} 是这条通道在目录里归哪个组织——它由设备的组织推导，通道行上的 {@code org_id} 已停写。
+ * 目录里挂在哪个父节点完全由设备组织推导（设备节点 → 设备组织 → 域节点），不再保存「按平台的父节点覆盖」，
+ * 同一通道推给 N 个上级时结构一致。
  */
 @Slf4j
 @Component
@@ -52,6 +54,9 @@ public class CascadeChannelManager {
 
     @Autowired
     private DeviceChannelManager deviceChannelManager;
+
+    @Autowired
+    private DeviceManager        deviceManager;
 
     @Autowired
     private CascadeOrgManager cascadeOrgManager;
@@ -89,8 +94,8 @@ public class CascadeChannelManager {
            留空先落空，由下面的 resolve 按规则生成并固化 */
         publish.setPublishCode(StringUtils.trimToNull(dto.getCascadeChannelId()));
         publish.setPublishName(dto.getCascadeName());
-        /* 组织归属只在本地台账（tb_device_channel.org_id），发布行不再保存按平台的父节点覆盖。
-           落库前先确认该组织在这个平台目录里立得起来，否则上级侧表现为「收到但挂不住」 */
+        /* 组织归属只看设备（通道行上的 org_id 已停写），发布行也不再保存按平台的父节点覆盖。
+           落库前先确认设备组织在这个平台目录里立得起来，否则上级侧表现为「收到但挂不住」 */
         assertLocalOrgVisible(dto.getPlatformId(), dto.getLocalChannelId());
         publish.setEnabled(dto.getEnabled() == null ? 1 : dto.getEnabled());
         copyMeta(dto, publish);
@@ -186,8 +191,8 @@ public class CascadeChannelManager {
     /**
      * 更新级联通道发布配置。
      *
-     * <p><b>不再接受「按平台的父节点覆盖」</b>：目录里挂在哪个节点完全由本地组织归属推导
-     * （通道自身组织 → 设备节点 → 设备组织 → 域节点）。想改挂位置就去改通道/设备的本地归属。
+     * <p><b>不再接受「按平台的父节点覆盖」</b>：目录里挂在哪个节点完全由设备的组织归属推导
+     * （设备节点 → 设备组织 → 域节点）。想改挂位置就去改设备归属。
      *
      * <p><b>启停不只是改字段</b>：{@code 1 -> 0} 必须显式推 {@code Event=DEL}，否则上级目录里的
      * 通道会永久留着（快照是增量 upsert 语义，不会因为节点「这次没出现」就删）；
@@ -415,20 +420,25 @@ public class CascadeChannelManager {
     }
 
     /**
-     * 校验本地归属组织在这个平台目录里立得起来。
+     * 校验通道所属设备的组织在这个平台目录里立得起来。
      *
-     * <p>组织归属只来自本地台账（{@code tb_device_channel.org_id}），所以校验要在写入口做：
+     * <p>通道没有独立归属，决定它挂在哪里的是<b>设备</b>的组织，校验因此落在写入口：
      * 脏归属一旦落库，上级侧表现为「通道收得到但不挂在任何组织下」，或者被快照直接剪掉
      * （组织取消同步且策略为 CASCADE）——页面显示上报中，上级却一条也看不到。
      *
-     * <p>没有归属、或归属的组织已被删除时放行：这两种情况下上级侧是「挂到域节点」，不是脏数据。
+     * <p>设备没有归属、或归属的组织已被删除时放行：这两种情况下上级侧是「挂到域节点」，不是脏数据。
      */
     private void assertLocalOrgVisible(String platformId, String localChannelId) {
         DeviceChannelDO local = deviceChannelManager.getByChannelId(localChannelId);
-        if (local == null || local.getOrgId() == null) {
+        if (local == null) {
             return;
         }
-        CascadeOrgDTO org = cascadeOrgManager.getById(local.getOrgId());
+        DeviceDTO device = deviceManager.getDtoByDeviceId(local.getDeviceId());
+        Long orgId = device == null ? null : device.getOrgId();
+        if (orgId == null) {
+            return;
+        }
+        CascadeOrgDTO org = cascadeOrgManager.getById(orgId);
         if (org != null) {
             assertVisible(platformId, org);
         }

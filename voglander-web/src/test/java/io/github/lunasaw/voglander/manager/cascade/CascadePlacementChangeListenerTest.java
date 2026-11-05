@@ -52,6 +52,10 @@ import io.github.lunasaw.voglander.repository.entity.CascadeOrgDO;
  * 报文里要的是该平台的上报编码。两者在真实环境里常常不同（平台可改码），用例里若用同值，
  * 「拿错一列」这类缺陷就测不出来。
  *
+ * <p><b>通道侧只走设备路径</b>：通道没有自己的组织归属，{@code scope=CHANNEL} 的事件在这里
+ * 会被直接忽略。设备换组织时通道是「跟着设备走」还是「留在旧组织下」，得靠新旧父节点对比算出来，
+ * 这是下面设备段用例的重点。
+ *
  * @author luna
  */
 @ExtendWith(MockitoExtension.class)
@@ -104,58 +108,11 @@ class CascadePlacementChangeListenerTest {
                 List.of(platformOrg(LOCAL_ORG_A, PLAT_ORG_A), platformOrg(LOCAL_ORG_B, PLAT_ORG_B)), Set.of()));
     }
 
-    // ------------------------------------------------------------------ 通道换组织
+    // ------------------------------------------------------------------ 前置过滤
 
     @Test
-    @DisplayName("通道换组织：DEL 定位到旧组织在该平台的上报编码")
-    void channel_move_uses_previous_org_code() {
-        stubChannelRows(publishRow("CHANNEL", OBJECT_KEY, 1));
-        when(publishedAssetResolver.projectChannels(any())).thenReturn(List.of(channel(LOCAL_ORG_B, null)));
-
-        listener.onPlacementChange(event("CHANNEL", OBJECT_KEY, ORG_A_ID, ORG_B_ID));
-
-        LocalCascadeCatalogChangeEvent del = captureSingle();
-        assertEquals("DEL", del.getEvent());
-        assertEquals(PLATFORM_ID, del.getPlatformId());
-        assertEquals(1, del.getNodes().size());
-        assertEquals(CHANNEL_CODE, del.getNodes().get(0).cascadeId(), "删的是这条通道在上级的编码");
-        assertEquals(PLAT_ORG_A, del.getNodes().get(0).parentCode(),
-            "必须用旧组织的上报编码定位：用新父会删到刚挂上去的那一份");
-    }
-
-    @Test
-    @DisplayName("换到该平台不可见的组织：新位置没了，旧位置更得删")
-    void channel_moved_to_invisible_org_still_deletes_old_node() {
-        /* 新组织不在该平台目录里、也不在 rerouted 集合中：快照里不会再出现这条通道 */
-        when(cascadeOrgManager.platformOrgView(PLATFORM_ID))
-            .thenReturn(new CascadePlatformOrgView(List.of(platformOrg(LOCAL_ORG_A, PLAT_ORG_A)), Set.of()));
-        stubChannelRows(publishRow("CHANNEL", OBJECT_KEY, 1));
-        when(publishedAssetResolver.projectChannels(any())).thenReturn(List.of(channel(LOCAL_ORG_B, null)));
-
-        listener.onPlacementChange(event("CHANNEL", OBJECT_KEY, ORG_A_ID, ORG_B_ID));
-
-        LocalCascadeCatalogChangeEvent del = captureSingle();
-        assertEquals(1, del.getNodes().size(), "新父为 null 不能被当成「位置没变」而跳过");
-        assertEquals(PLAT_ORG_A, del.getNodes().get(0).parentCode());
-    }
-
-    @Test
-    @DisplayName("发布行停用：上级目录里本来就没有它，不发 DEL")
-    void disabled_publish_row_is_skipped() {
-        stubChannelRows(publishRow("CHANNEL", OBJECT_KEY, 0));
-        when(publishedAssetResolver.projectChannels(any())).thenReturn(List.of(channel(LOCAL_ORG_B, null)));
-
-        listener.onPlacementChange(event("CHANNEL", OBJECT_KEY, ORG_A_ID, ORG_B_ID));
-
-        assertNoEvent();
-    }
-
-    @Test
-    @DisplayName("旧组织已被物理删除：它的节点早随组织删除撤掉，不再重复删")
-    void deleted_previous_org_is_skipped() {
-        when(cascadeOrgService.list()).thenReturn(List.of(org(ORG_B_ID, LOCAL_ORG_B)));
-        stubChannelRows(publishRow("CHANNEL", OBJECT_KEY, 1));
-
+    @DisplayName("非设备范围的归属变更：通道不再单独挪位置，直接忽略")
+    void non_device_scope_is_ignored() {
         listener.onPlacementChange(event("CHANNEL", OBJECT_KEY, ORG_A_ID, ORG_B_ID));
 
         assertNoEvent();
@@ -164,12 +121,52 @@ class CascadePlacementChangeListenerTest {
     @Test
     @DisplayName("归属没变：发 DEL 会把刚推上去的节点再删一次")
     void unchanged_placement_is_skipped() {
-        listener.onPlacementChange(event("CHANNEL", OBJECT_KEY, ORG_A_ID, ORG_A_ID));
+        listener.onPlacementChange(event("DEVICE", DEVICE_ID, ORG_A_ID, ORG_A_ID));
+
+        assertNoEvent();
+    }
+
+    @Test
+    @DisplayName("旧组织已被物理删除：它的节点早随组织删除撤掉，不再重复删")
+    void deleted_previous_org_is_skipped() {
+        when(cascadeOrgService.list()).thenReturn(List.of(org(ORG_B_ID, LOCAL_ORG_B)));
+
+        listener.onPlacementChange(event("DEVICE", DEVICE_ID, ORG_A_ID, ORG_B_ID));
+
+        assertNoEvent();
+    }
+
+    @Test
+    @DisplayName("发布行停用：上级目录里本来就没有它，不发 DEL")
+    void disabled_publish_row_is_skipped() {
+        when(cascadePublishManager.listByObjectKeys(eq("DEVICE"), any()))
+            .thenReturn(List.of(publishRow("DEVICE", DEVICE_ID, 0)));
+        when(cascadePublishManager.listByObjectKeyPrefix(eq("CHANNEL"), any()))
+            .thenReturn(List.of(publishRow("CHANNEL", OBJECT_KEY, 0)));
+        when(publishedAssetResolver.projectChannels(any())).thenReturn(List.of(channel(null, LOCAL_ORG_B)));
+
+        listener.onPlacementChange(event("DEVICE", DEVICE_ID, ORG_A_ID, ORG_B_ID));
 
         assertNoEvent();
     }
 
     // ------------------------------------------------------------------ 设备换组织
+
+    @Test
+    @DisplayName("设备换到该平台不可见的组织：新位置没了，旧位置更得删")
+    void device_moved_to_invisible_org_still_deletes_old_node() {
+        /* 新组织不在该平台目录里、也不在 rerouted 集合中：快照里不会再出现这台设备和它的通道 */
+        when(cascadeOrgManager.platformOrgView(PLATFORM_ID))
+            .thenReturn(new CascadePlatformOrgView(List.of(platformOrg(LOCAL_ORG_A, PLAT_ORG_A)), Set.of()));
+        stubDeviceRows();
+        when(publishedAssetResolver.projectChannels(any())).thenReturn(List.of(channel(null, LOCAL_ORG_B)));
+
+        listener.onPlacementChange(event("DEVICE", DEVICE_ID, ORG_A_ID, ORG_B_ID));
+
+        LocalCascadeCatalogChangeEvent del = captureSingle();
+        assertEquals(1, del.getNodes().size(), "新父为 null 不能被当成「位置没变」而跳过");
+        assertEquals(PLAT_ORG_A, del.getNodes().get(0).parentCode());
+    }
 
     @Test
     @DisplayName("设备换组织且未开设备层：删的是跟随设备的通道，父为旧组织上报编码")
@@ -206,22 +203,18 @@ class CascadePlacementChangeListenerTest {
     }
 
     @Test
-    @DisplayName("通道自带组织：设备换组织不影响它的挂载位置")
-    void channel_with_own_org_is_not_moved_by_device() {
-        when(cascadePlatformManager.getByPlatformId(PLATFORM_ID)).thenReturn(platform(1));
+    @DisplayName("通道自带的 orgId 一律忽略：位置仍由设备决定")
+    void channel_own_org_is_ignored_by_device_move() {
         stubDeviceRows();
-        when(cascadePublishManager.get(PLATFORM_ID, "DEVICE", DEVICE_ID))
-            .thenReturn(publishRow("DEVICE", DEVICE_ID, 1, DEVICE_CODE, "门口设备"));
-        when(publishedAssetResolver.listDevices(PLATFORM_ID))
-            .thenReturn(List.of(deviceView(LOCAL_ORG_B)));
-        /* 通道自己有组织 A：第 1 级命中，设备挪到哪都与它无关 */
+        /* 历史脏值：通道行上还留着组织 A，但设备的归属已经改到 B；通道没有自己的位置 */
         when(publishedAssetResolver.projectChannels(any())).thenReturn(List.of(channel(LOCAL_ORG_A, LOCAL_ORG_B)));
 
         listener.onPlacementChange(event("DEVICE", DEVICE_ID, ORG_A_ID, ORG_B_ID));
 
         LocalCascadeCatalogChangeEvent del = captureSingle();
-        assertEquals(1, del.getNodes().size());
-        assertEquals(DEVICE_CODE, del.getNodes().get(0).cascadeId(), "只剩设备节点，通道节点不应出现");
+        assertEquals(1, del.getNodes().size(), "通道必须跟着设备挪，不能因为自带组织就留在原处");
+        assertEquals(CHANNEL_CODE, del.getNodes().get(0).cascadeId());
+        assertEquals(PLAT_ORG_A, del.getNodes().get(0).parentCode(), "删的是旧组织下那份");
     }
 
     @Test
@@ -249,10 +242,6 @@ class CascadePlacementChangeListenerTest {
     }
 
     // ------------------------------------------------------------------ 夹具
-
-    private void stubChannelRows(CascadePublishDTO row) {
-        when(cascadePublishManager.listByObjectKeys(eq("CHANNEL"), any())).thenReturn(List.of(row));
-    }
 
     /** 设备自己那一行 + 名下通道那一行：{@code affectedRows} 两条都要捞到 */
     private void stubDeviceRows() {

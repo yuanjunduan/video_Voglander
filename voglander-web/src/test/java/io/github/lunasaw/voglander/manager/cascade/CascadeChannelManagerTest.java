@@ -90,17 +90,22 @@ class CascadeChannelManagerTest extends BaseTest {
     }
 
     /**
-     * 把本地通道的归属组织设成 {@code orgId}。
+     * 把通道所属设备的归属组织设成 {@code orgId}。
      *
-     * <p>目录里挂在哪个父节点只看本地台账（{@code tb_device_channel.org_id}），发布行上不再有
-     * 「按平台的父节点覆盖」，所以组织门禁用例必须在本地通道上设归属才有意义。
+     * <p>通道没有独立的组织归属：它在上级目录里挂哪个父节点只看设备归哪个组织，所以组织门禁
+     * 用例必须从设备侧下手。{@code deviceChannelManager.update} 传 {@code orgId} 会被摘掉，写了也不生效。
      */
-    private void assignLocalOrg(String localChannelId, Long orgId) {
+    private void assignDeviceOrg(String localChannelId, Long orgId) {
         DeviceChannelDTO query = new DeviceChannelDTO();
         query.setChannelId(localChannelId);
-        DeviceChannelDTO patch = new DeviceChannelDTO();
+        DeviceChannelDTO channel = deviceChannelManager.get(query);
+        assertNotNull(channel, "夹具通道必须存在: " + localChannelId);
+
+        DeviceDTO device = deviceManager.getDtoByDeviceId(channel.getDeviceId());
+        assertNotNull(device, "夹具设备必须存在: " + channel.getDeviceId());
+        DeviceDTO patch = new DeviceDTO();
         patch.setOrgId(orgId);
-        deviceChannelManager.update(query, patch);
+        deviceManager.updateById(device.getId(), patch);
     }
 
     @Nested
@@ -254,7 +259,7 @@ class CascadeChannelManagerTest extends BaseTest {
 
             String localChannelId = UniqueKeyFactory.channelId();
             CascadeChannelDTO dto = buildDto(platformId, localChannelId);
-            assignLocalOrg(localChannelId, orgId);
+            assignDeviceOrg(localChannelId, orgId);
             Long publishId = cascadeChannelManager.add(dto);
             cascadeChannelManager.revoke(publishId);
             cascadeOrgManager.disable(orgId);
@@ -272,7 +277,7 @@ class CascadeChannelManagerTest extends BaseTest {
 
             String localChannelId = UniqueKeyFactory.channelId();
             CascadeChannelDTO dto = buildDto(platformId, localChannelId);
-            assignLocalOrg(localChannelId, orgs[1]);
+            assignDeviceOrg(localChannelId, orgs[1]);
             Long publishId = cascadeChannelManager.add(dto);
             cascadeChannelManager.revoke(publishId);
             cascadeOrgManager.disable(orgs[0]);
@@ -290,7 +295,7 @@ class CascadeChannelManagerTest extends BaseTest {
 
             String localChannelId = UniqueKeyFactory.channelId();
             CascadeChannelDTO dto = buildDto(platformId, localChannelId);
-            assignLocalOrg(localChannelId, orgs[1]);
+            assignDeviceOrg(localChannelId, orgs[1]);
             Long publishId = cascadeChannelManager.add(dto);
             cascadeChannelManager.revoke(publishId);
             cascadeOrgManager.disable(orgs[0]);
@@ -311,7 +316,7 @@ class CascadeChannelManagerTest extends BaseTest {
 
             String localChannelId = UniqueKeyFactory.channelId();
             CascadeChannelDTO dto = buildDto(platformId, localChannelId);
-            assignLocalOrg(localChannelId, orgs[1]);
+            assignDeviceOrg(localChannelId, orgs[1]);
 
             assertThrows(IllegalArgumentException.class, () -> cascadeChannelManager.add(dto));
             assertNull(cascadeChannelManager.getByPlatformAndChannel(platformId, localChannelId),
@@ -326,7 +331,7 @@ class CascadeChannelManagerTest extends BaseTest {
 
             String localChannelId = UniqueKeyFactory.channelId();
             CascadeChannelDTO dto = buildDto(platformId, localChannelId);
-            assignLocalOrg(localChannelId, orgs[1]);
+            assignDeviceOrg(localChannelId, orgs[1]);
             Long publishId = cascadeChannelManager.add(dto);
             cascadeChannelManager.revoke(publishId);
 

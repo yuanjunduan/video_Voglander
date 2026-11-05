@@ -249,7 +249,7 @@ public class LocalCascadeCodeRuleService implements CascadeCodeRuleService {
                 pool.add(row.getPublishCode());
             }
         }
-        for (DeviceChannelDO local : deviceChannelManager.listOrgLinkProjection()) {
+        for (DeviceChannelDO local : deviceChannelManager.listDeviceChannelProjection()) {
             if (StringUtils.isNotBlank(local.getChannelId())) {
                 pool.add(local.getChannelId());
             }

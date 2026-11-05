@@ -247,10 +247,14 @@ public class CascadePublishedAssetResolver {
         dto.setLocalChannelId(row.channelId());
         dto.setCascadeChannelId(CascadeCodeBuilder.effectiveCode(publish.getPublishCode(), row.channelId()));
         dto.setCascadeName(StringUtils.defaultIfBlank(publish.getPublishName(), local.getName()));
-        /* 通道自己的归属优先；为空表示跟随设备，由组装器决定挂设备还是挂设备的组织。
-           发布行的 parent_key 不再参与：目录结构只由本地归属一个真相推导 */
-        dto.setCascadeOrgId(local.getOrgId() == null ? null : orgCodeById.get(local.getOrgId()));
-        dto.setDeviceOrgCode(device.getOrgId() == null ? null : orgCodeById.get(device.getOrgId()));
+        /* 通道没有独立归属：目录位置只由设备决定（设备节点 → 设备组织 → 域节点）。
+           通道表上的 org_id 已停写停读——两套归属并存时，通道自己那份一旦生效就会把节点
+           从设备节点下挪到组织节点下，「组织 → 设备 → 通道」的形态当场断裂。
+           两个字段取同一个值：cascadeOrgId 是「这条通道在目录里归哪个组织」的对外口径
+           （分页组织筛选、可见性门禁、列表展示都读它），deviceOrgCode 是父节点解析的输入 */
+        String deviceOrgCode = device.getOrgId() == null ? null : orgCodeById.get(device.getOrgId());
+        dto.setCascadeOrgId(deviceOrgCode);
+        dto.setDeviceOrgCode(deviceOrgCode);
         dto.setEnabled(publish.getEnabled() == null ? 1 : publish.getEnabled());
         dto.setManufacturer(publish.getManufacturer());
         dto.setModel(publish.getModel());

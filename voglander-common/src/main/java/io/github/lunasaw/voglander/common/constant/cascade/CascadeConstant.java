@@ -168,15 +168,15 @@ public interface CascadeConstant {
      * 归属变更的范围标记（{@code LocalCascadePlacementChangeEvent} 的 {@code scope}）。
      *
      * <p>与 {@link PublishObjectType} 同值但语义不同：那边是发布行的对象类型，这边是「变了什么」。
-     * 两者今天恰好一一对应，但以后若出现只动通道不动设备的规则，这个值不会跟着被动。
+     *
+     * <p><b>只有设备一种</b>：通道是设备的子资源，没有自己的组织归属，位置只由设备决定。
+     * 曾经有过 {@code CHANNEL} 范围（单条通道改组织），通道停用独立归属后这条路径不存在了；
+     * 留着它只会让「通道也能单独挪位置」的错觉回到代码里。
      */
     interface PlacementScope {
 
         /** 设备（含其下跟随设备的通道） */
-        String DEVICE  = "DEVICE";
-
-        /** 单条通道 */
-        String CHANNEL = "CHANNEL";
+        String DEVICE = "DEVICE";
     }
 
     /** 录像查询请求状态（对齐 tb_cascade_record_request.status） */

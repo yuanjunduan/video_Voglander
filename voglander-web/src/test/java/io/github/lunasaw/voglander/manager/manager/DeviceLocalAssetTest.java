@@ -30,11 +30,14 @@ import io.github.lunasaw.voglander.support.UniqueKeyFactory;
  *
  * <p>守两条不能退的语义：
  * <ul>
- *   <li>{@code org_id} 的三态——{@code null} 不改、{@code 0} 清空、其余按 id 归组织。
+ *   <li>设备的 {@code org_id} 三态——{@code null} 不改、{@code 0} 清空、其余按 id 归组织。
  *       没有"清空"这个显式值，{@code updateById} 跳过 null 列会导致归属永远摘不掉。</li>
  *   <li>目录同步不覆盖用户配置——设备目录每秒都在重传，同步来的 DTO 不带
  *       {@code org_id}/{@code enabled}，批量 upsert 必须跳过这两列。</li>
  * </ul>
+ *
+ * <p><b>通道没有独立归属</b>：位置只由设备决定，写入侧（新增/更新/同步）一律摘掉
+ * {@code orgId}，库里残留的旧值原样不动——发布侧根本不读它。
  *
  * <p>组织归属不做外键约束，用例直接用裸 id，避免为一次断言造一整棵组织树。
  *
@@ -187,24 +190,23 @@ class DeviceLocalAssetTest extends BaseTest {
     // ------------------------------------------------------------------ 通道
 
     @Nested
-    @DisplayName("通道：组织归属与本地启停")
+    @DisplayName("通道：本地启停")
     class ChannelAsset {
 
         @Test
-        @DisplayName("通道可独立归组织，传 0 清空改为跟随设备")
-        void should_set_and_clear_org() {
+        @DisplayName("通道没有独立归属：新增时传的 orgId 被摘掉，落库为 NULL")
+        void channel_org_id_is_discarded_on_create() {
             DeviceDO device = createDevice();
-            DeviceChannelDO channel = createChannel(device.getDeviceId());
+            DeviceChannelDTO dto = new DeviceChannelDTO();
+            dto.setDeviceId(device.getDeviceId());
+            dto.setChannelId(UniqueKeyFactory.channelId());
+            dto.setName("前门");
+            dto.setOrgId(TEST_ORG_ID);
 
-            DeviceChannelDTO assign = new DeviceChannelDTO();
-            assign.setOrgId(TEST_ORG_ID);
-            deviceChannelManager.updateById(channel.getId(), assign);
-            assertEquals(TEST_ORG_ID, reload(channel).getOrgId());
+            Long id = deviceChannelManager.add(dto);
 
-            DeviceChannelDTO clear = new DeviceChannelDTO();
-            clear.setOrgId(0L);
-            deviceChannelManager.updateById(channel.getId(), clear);
-            assertNull(reload(channel).getOrgId());
+            assertNull(deviceChannelService.getById(id).getOrgId(),
+                "通道跟着设备走，写入侧不应留下组织——留着就有第二套归属了");
         }
 
         @Test
@@ -223,15 +225,20 @@ class DeviceLocalAssetTest extends BaseTest {
         }
 
         @Test
-        @DisplayName("目录同步不覆盖用户配置的组织与启停")
+        @DisplayName("目录同步不覆盖用户配置的启停")
         void catalogSync_should_not_overwrite_user_config() {
             DeviceDO device = createDevice();
             DeviceChannelDO channel = createChannel(device.getDeviceId());
 
             DeviceChannelDTO config = new DeviceChannelDTO();
-            config.setOrgId(TEST_ORG_ID);
             config.setEnabled(0);
             deviceChannelManager.updateById(channel.getId(), config);
+
+            /* 停用通道独立归属之前留下的脏值：同步既不该写它，也不该顺手抹掉 */
+            DeviceChannelDO dirty = new DeviceChannelDO();
+            dirty.setId(channel.getId());
+            dirty.setOrgId(TEST_ORG_ID);
+            deviceChannelService.updateById(dirty);
 
             /* 目录重传：名字变了，但不带 orgId/enabled——这是设备上报的真实形态 */
             DeviceChannelDTO synced = new DeviceChannelDTO();
@@ -243,28 +250,8 @@ class DeviceLocalAssetTest extends BaseTest {
             DeviceChannelDO after = reload(channel);
             assertNotNull(after);
             assertEquals("目录里的新名字", after.getName(), "目录字段要跟上");
-            assertEquals(TEST_ORG_ID, after.getOrgId(), "组织归属是人工配置，同步不能冲掉");
             assertEquals(0, after.getEnabled(), "本地停用是人工配置，同步不能冲掉");
-        }
-
-        @Test
-        @DisplayName("按组织统计通道：显式归属与跟随设备归属分别计数")
-        void should_count_direct_and_inherited() {
-            DeviceDO device = createDevice();
-            DeviceChannelDO direct = createChannel(device.getDeviceId());
-            DeviceChannelDO inherited = createChannel(device.getDeviceId());
-
-            DeviceChannelDTO orgOfChannel = new DeviceChannelDTO();
-            orgOfChannel.setOrgId(TEST_ORG_ID);
-            deviceChannelManager.updateById(direct.getId(), orgOfChannel);
-
-            assertEquals(1, deviceChannelManager.countByOrgId(TEST_ORG_ID), "只数显式归属");
-            assertEquals(1, deviceChannelManager.countUnownedByDeviceIds(List.of(device.getDeviceId())),
-                "另一条未归属，跟随设备");
-            assertEquals(2, deviceChannelManager.countByOrgId(TEST_ORG_ID)
-                + deviceChannelManager.countUnownedByDeviceIds(List.of(device.getDeviceId())),
-                "两种归属合起来才是该组织下的通道占用数");
-            assertNull(reload(inherited).getOrgId());
+            assertEquals(TEST_ORG_ID, after.getOrgId(), "存量脏值原样保留：同步不碰这一列");
         }
     }
 }

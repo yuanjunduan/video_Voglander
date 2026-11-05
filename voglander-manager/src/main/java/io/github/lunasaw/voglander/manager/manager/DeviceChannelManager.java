@@ -6,10 +6,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.luna.common.check.Assert;
-import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.PlacementScope;
-import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.PublishKeys;
 import io.github.lunasaw.voglander.common.constant.device.DeviceConstant;
-import io.github.lunasaw.voglander.common.event.LocalCascadePlacementChangeEvent;
 import io.github.lunasaw.voglander.common.exception.ServiceException;
 import io.github.lunasaw.voglander.common.exception.ServiceExceptionEnum;
 import io.github.lunasaw.voglander.manager.assembler.DeviceChannelAssembler;
@@ -25,7 +22,6 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.CacheManager;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -111,13 +107,6 @@ public class DeviceChannelManager {
 
     @Autowired
     private CacheManager           cacheManager;
-
-    /**
-     * 归属变更广播：上级目录不会因为「节点这次没出现在快照里」就删掉它，
-     * 所以改组织以后必须显式通知一次旧位置。
-     */
-    @Autowired
-    private ApplicationEventPublisher eventPublisher;
 
     @Value("${voglander.device-channel.cascade-offline-batch-size:500}")
     private int    cascadeOfflineBatchSize;
@@ -266,64 +255,15 @@ public class DeviceChannelManager {
     }
 
     /**
-     * 统计直接归属到某组织的通道数（不含通过设备继承归属的通道）。
+     * 设备通道的轻量投影（只取 {@code device_id} / {@code channel_id}）。
      *
-     * <p>删除组织前用它做占用校验：通道自带 {@code org_id} 是为了表达
-     * "设备在 A 组织、某路通道归 B 业务分组"，因此这里只数显式归属。
-     *
-     * @param orgId 组织主键
-     * @return 直接归属的通道数
+     * <p>两处调用：组织树按「设备归属」统计通道数，以及级联编码号码池收集本地通道标识。
+     * 通道没有自己的组织，投影里不再带 {@code org_id}——留着列会让后来人以为还有第二套归属。
      */
-    public long countByOrgId(Long orgId) {
-        if (orgId == null) {
-            return 0L;
-        }
+    public List<DeviceChannelDO> listDeviceChannelProjection() {
         LambdaQueryWrapper<DeviceChannelDO> qw = new LambdaQueryWrapper<>();
-        qw.eq(DeviceChannelDO::getOrgId, orgId);
-        return deviceChannelService.count(qw);
-    }
-
-    /**
-     * 列出直接归属到某组织的通道（组装器与通道页共用）。
-     *
-     * @param orgId 组织主键
-     * @return 通道 DO 列表；orgId 为空返回空列表
-     */
-    public List<DeviceChannelDO> listByOrgId(Long orgId) {
-        if (orgId == null) {
-            return Collections.emptyList();
-        }
-        LambdaQueryWrapper<DeviceChannelDO> qw = new LambdaQueryWrapper<>();
-        qw.eq(DeviceChannelDO::getOrgId, orgId);
+        qw.select(DeviceChannelDO::getDeviceId, DeviceChannelDO::getChannelId);
         return deviceChannelService.list(qw);
-    }
-
-    /**
-     * 通道 → 组织归属的轻量投影（只取 {@code device_id} / {@code org_id}）。
-     *
-     * <p>刻意全表扫：组织树统计通道数要同时覆盖"通道显式归属组织"与"通道跟随设备归属"，
-     * 只取 {@code org_id} 非空的通道会漏掉后者。
-     */
-    public List<DeviceChannelDO> listOrgLinkProjection() {
-        LambdaQueryWrapper<DeviceChannelDO> qw = new LambdaQueryWrapper<>();
-        qw.select(DeviceChannelDO::getDeviceId, DeviceChannelDO::getOrgId);
-        return deviceChannelService.list(qw);
-    }
-
-    /**
-     * 统计给定设备下"未显式归属组织"的通道数（这些通道跟随设备归属）。
-     *
-     * @param deviceIds 设备国标 ID 集合
-     * @return 通道数；集合为空返回 0
-     */
-    public long countUnownedByDeviceIds(Collection<String> deviceIds) {
-        if (deviceIds == null || deviceIds.isEmpty()) {
-            return 0L;
-        }
-        LambdaQueryWrapper<DeviceChannelDO> qw = new LambdaQueryWrapper<>();
-        qw.in(DeviceChannelDO::getDeviceId, deviceIds)
-            .isNull(DeviceChannelDO::getOrgId);
-        return deviceChannelService.count(qw);
     }
 
     /**
@@ -527,15 +467,10 @@ public class DeviceChannelManager {
 
         DeviceChannelDO deviceChannelDO = DeviceChannelDTO.convertDO(deviceChannelDTO);
         deviceChannelDO.setUpdateTime(LocalDateTime.now());
+        discardOrgId(deviceChannelDO, deviceChannelDTO);
 
         // 调用统一入口方法
-        Long result = deviceChannelInternal(deviceChannelDO, "更新设备通道");
-        /* 这里的 orgId 直接落库（不经 update 的 0→NULL 归一），因此直接拿入参比：
-           0 在解析层与 null 等价（查不到编码 → 视为无归属），不会误报 */
-        publishPlacementChange(existingChannel.getDeviceId(), existingChannel.getChannelId(),
-            existingChannel.getOrgId(),
-            deviceChannelDTO.getOrgId() == null ? existingChannel.getOrgId() : deviceChannelDTO.getOrgId());
-        return result;
+        return deviceChannelInternal(deviceChannelDO, "更新设备通道");
     }
 
     /**
@@ -765,6 +700,7 @@ public class DeviceChannelManager {
         LocalDateTime now = LocalDateTime.now();
         for (java.util.Map.Entry<String, DeviceChannelDTO> e : dedup.entrySet()) {
             DeviceChannelDO target = deviceChannelAssembler.dtoToDo(e.getValue());
+            discardOrgId(target, e.getValue());
             target.setUpdateTime(now);
             DeviceChannelDO exist = existing.get(e.getKey());
             if (exist != null) {
@@ -823,8 +759,7 @@ public class DeviceChannelManager {
         try {
             // 转为DO
             DeviceChannelDO deviceChannelDO = deviceChannelAssembler.dtoToDo(deviceChannelDTO);
-            // 新增时 0 与 null 等价：组织主键从 1 开始，0 永远不是合法组织
-            deviceChannelDO.setOrgId(normalizeOrgId(deviceChannelDTO.getOrgId()));
+            discardOrgId(deviceChannelDO, deviceChannelDTO);
             deviceChannelDO.setCreateTime(LocalDateTime.now());
             deviceChannelDO.setUpdateTime(LocalDateTime.now());
 
@@ -883,28 +818,15 @@ public class DeviceChannelManager {
             updateDO.setUpdateTime(LocalDateTime.now());
 
             assertEnabledValid(updateDTO.getEnabled());
-            // org_id 用 0 表示"清空归属"（落库为 null，改为跟随设备归属）：updateById 跳过 null 列、
-            // 无法把"有值"改回"无值"，故先把 0 从实体里摘掉，更新成功后再补一条 SET org_id = NULL
-            boolean clearOrgId = updateDTO.getOrgId() != null && updateDTO.getOrgId() == 0L;
-            if (clearOrgId) {
-                updateDO.setOrgId(null);
-            }
+            discardOrgId(updateDO, updateDTO);
 
             boolean success = deviceChannelService.updateById(updateDO);
             if (!success) {
                 throw new ServiceException(ServiceExceptionEnum.CHANNEL_OPERATION_FAILED, "数据库更新失败");
             }
-            if (clearOrgId) {
-                resetOrgId(existingRecord.getId());
-            }
 
             String newKey = buildDeviceChannelKey(updateDO.getDeviceId(), updateDO.getChannelId());
             clearCache(updateDO.getId(), oldKey, newKey);
-            /* 归属变了要告知上级换位置：快照是增量 upsert，旧组织下那份不会自己消失 */
-            publishPlacementChange(existingRecord.getDeviceId(), existingRecord.getChannelId(),
-                existingRecord.getOrgId(),
-                updateDTO.getOrgId() == null ? existingRecord.getOrgId()
-                    : (updateDTO.getOrgId() == 0L ? null : updateDTO.getOrgId()));
 
             return updateDO.getId();
         } catch (ServiceException e) {
@@ -1159,30 +1081,18 @@ public class DeviceChannelManager {
     }
 
     /**
-     * 清空通道的组织归属（落库为 null，改为跟随设备归属）。
+     * 摘掉入参里的组织归属：通道是设备的子资源，位置只由设备决定。
      *
-     * <p>{@code updateById} 默认跳过 null 列，没有这条定向 UPDATE 就无法把通道从组织里移走。
+     * <p>入参若还带着 {@code orgId}（老客户端、第三方集成），不能默默落库又不读它——
+     * 那样页面显示「归 A」、上级目录却挂在设备下，两边各说各话。这里统一摘掉并告警，
+     * 让失效是看得见的。
      */
-    private void resetOrgId(Long id) {
-        deviceChannelService.lambdaUpdate()
-            .eq(DeviceChannelDO::getId, id)
-            .set(DeviceChannelDO::getOrgId, null)
-            .update();
-    }
-
-    /**
-     * 归属真的变了才广播。
-     *
-     * <p>广播用发布行业务键（{@code deviceId:channelId}）而不是自增主键：监听器要拿它去查
-     * {@code tb_cascade_publish}，两边必须同口径。
-     */
-    private void publishPlacementChange(String deviceId, String channelId, Long previousOrgId, Long currentOrgId) {
-        if (eventPublisher == null || StringUtils.isBlank(deviceId) || StringUtils.isBlank(channelId)
-            || Objects.equals(previousOrgId, currentOrgId)) {
-            return;
+    private void discardOrgId(DeviceChannelDO target, DeviceChannelDTO source) {
+        if (source != null && normalizeOrgId(source.getOrgId()) != null) {
+            log.warn("设备通道不再支持独立组织归属，已忽略 orgId={}: deviceId={}, channelId={}",
+                source.getOrgId(), target.getDeviceId(), target.getChannelId());
         }
-        eventPublisher.publishEvent(new LocalCascadePlacementChangeEvent(PlacementScope.CHANNEL,
-            PublishKeys.channel(deviceId, channelId), previousOrgId, currentOrgId));
+        target.setOrgId(null);
     }
 
     // ================================
@@ -1325,6 +1235,7 @@ public class DeviceChannelManager {
             DeviceChannelDTO dto = e.getValue();
             DeviceChannelDO exist = snapshot.get(e.getKey());
             DeviceChannelDO target = deviceChannelAssembler.dtoToDo(dto);
+            discardOrgId(target, dto);
             target.setUpdateTime(now);
 
             if (exist != null) {

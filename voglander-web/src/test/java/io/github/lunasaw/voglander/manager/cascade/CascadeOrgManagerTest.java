@@ -135,19 +135,13 @@ class CascadeOrgManagerTest extends BaseTest {
         return deviceId;
     }
 
-    /** 在设备下造一条通道；{@code orgId} 为空表示不直挂，归属跟随设备。返回通道主键。 */
-    private Long createChannel(String deviceId, Long orgId) {
+    /** 在设备下造一条通道。通道没有自己的归属，组织挂在设备上。返回通道主键。 */
+    private Long createChannel(String deviceId) {
         DeviceChannelDTO dto = new DeviceChannelDTO();
         dto.setDeviceId(deviceId);
         dto.setChannelId(UniqueKeyFactory.channelId());
         dto.setName("ch-占用校验");
-        Long id = deviceChannelManager.add(dto);
-        if (orgId != null) {
-            DeviceChannelDTO assign = new DeviceChannelDTO();
-            assign.setOrgId(orgId);
-            deviceChannelManager.updateById(id, assign);
-        }
-        return id;
+        return deviceChannelManager.add(dto);
     }
 
     /**
@@ -155,21 +149,19 @@ class CascadeOrgManagerTest extends BaseTest {
      *
      * <p>目录来源已收敛到发布层，而发布行只认库里真有的通道：随便编两个 id 会被
      * {@code CascadePublishedAssetResolver} 当孤儿丢弃，用例就会误判成「目录里没有通道」。
-     * 组织归属写到本地 {@code org_id}——通道的父节点是按本地归属推导的，只配发布行没用。
+     *
+     * <p>组织挂在<b>设备</b>上：通道是设备的子资源，没有自己的归属，父节点由设备组织推导。
      */
     private CascadeChannelDTO channel(String platformId, String orgCode) {
-        String deviceId = createDevice(null);
+        Long orgId = orgCode == null ? null : cascadeOrgManager.getByCode(orgCode).getId();
+        String deviceId = createDevice(orgId);
         String channelId = UniqueKeyFactory.channelId();
         DeviceChannelDTO local = new DeviceChannelDTO();
         local.setDeviceId(deviceId);
         local.setChannelId(channelId);
         local.setName("ch-目录预览");
-        Long pk = deviceChannelManager.add(local);
-        if (orgCode != null) {
-            DeviceChannelDTO assign = new DeviceChannelDTO();
-            assign.setOrgId(cascadeOrgManager.getByCode(orgCode).getId());
-            deviceChannelManager.updateById(pk, assign);
-        }
+        deviceChannelManager.add(local);
+
         CascadeChannelDTO ch = new CascadeChannelDTO();
         ch.setPlatformId(platformId);
         ch.setLocalDeviceId(deviceId);
@@ -288,17 +280,15 @@ class CascadeOrgManagerTest extends BaseTest {
         }
 
         @Test
-        @DisplayName("直属通道数与跟随设备归属的通道都计入该组织")
-        void should_count_direct_channels() {
+        @DisplayName("通道数跟着设备走：设备归哪个组织，它名下通道就算哪个组织")
+        void should_count_channels_by_device_org() {
             Long rootId = cascadeOrgManager.add(org(null, "一层"));
-            String deviceInOrg = createDevice(rootId);
-            String deviceFree = createDevice(null);
+            createChannel(createDevice(rootId));
+            /* 设备不归组织：它名下的通道也不该算到任何组织头上 */
+            createChannel(createDevice(null));
 
-            createChannel(deviceInOrg, null);   // 通道自己不填组织，归属跟随设备
-            createChannel(deviceFree, rootId);  // 设备不归组织，通道自己挂
-
-            assertEquals(2, findRoot(cascadeOrgManager.tree(), rootId).getChannelCount(),
-                "两种归属都要算进该组织，否则删组织时会把占用漏成可删");
+            assertEquals(1, findRoot(cascadeOrgManager.tree(), rootId).getChannelCount(),
+                "只有归属该组织的设备下通道才计入");
         }
 
         @Test
@@ -344,19 +334,6 @@ class CascadeOrgManagerTest extends BaseTest {
             cascadeOrgManager.add(org(rootId, "二层"));
 
             assertThrows(IllegalArgumentException.class, () -> cascadeOrgManager.delete(rootId));
-        }
-
-        @Test
-        @DisplayName("还有直挂组织的通道时拒绝删除，报错要指名是通道占用")
-        void should_reject_when_channel_bound() {
-            Long rootId = cascadeOrgManager.add(org(null, "一层"));
-            /* 设备不归组织：否则会先命中设备占用，通道这条断言永远跑不到 */
-            String deviceId = createDevice(null);
-            createChannel(deviceId, rootId);
-
-            IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
-                () -> cascadeOrgManager.delete(rootId));
-            assertTrue(ex.getMessage().contains("1 路通道"), "设备侧为 0，报错必须指向通道占用: " + ex.getMessage());
         }
 
         @Test
@@ -1005,7 +982,7 @@ class CascadeOrgManagerTest extends BaseTest {
             Long rootId = cascadeOrgManager.add(org(null, "一层"));
             Long midId = cascadeOrgManager.add(org(rootId, "二层"));
             Long targetId = cascadeOrgManager.add(org(null, "另一棵树的根"));
-            createChannel(createDevice(midId), null);
+            createChannel(createDevice(midId));
 
             assertTrue(cascadeOrgManager.move(midId, targetId));
 

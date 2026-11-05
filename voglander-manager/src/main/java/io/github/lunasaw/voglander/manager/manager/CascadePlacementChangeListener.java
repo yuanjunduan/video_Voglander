@@ -81,6 +81,12 @@ public class CascadePlacementChangeListener {
         if (event == null || StringUtils.isBlank(event.getObjectKey())) {
             return;
         }
+        if (!PlacementScope.DEVICE.equalsIgnoreCase(event.getScope())) {
+            /* 通道没有自己的组织归属，位置只由设备决定：单通道事件不该再出现在这里 */
+            log.warn("忽略非设备归属变更事件，通道不再单独挪位置: scope={}, objectKey={}",
+                event.getScope(), event.getObjectKey());
+            return;
+        }
         if (Objects.equals(event.getPreviousOrgId(), event.getCurrentOrgId())) {
             return;
         }
@@ -103,7 +109,7 @@ public class CascadePlacementChangeListener {
             return;
         }
 
-        List<CascadePublishDTO> rows = affectedRows(event);
+        List<CascadePublishDTO> rows = affectedRows(event.getObjectKey());
         if (rows.isEmpty()) {
             return;
         }
@@ -129,25 +135,19 @@ public class CascadePlacementChangeListener {
     }
 
     /**
-     * 受影响的启用发布行。
+     * 受影响的启用发布行：设备自己那一行 + 名下全部通道的发布行。
      *
      * <p>停用的行不发：上级目录里本来就没有它（停用时会显式 {@code DEL}），再删一次只会多一趟往返。
      */
-    private List<CascadePublishDTO> affectedRows(LocalCascadePlacementChangeEvent event) {
+    private List<CascadePublishDTO> affectedRows(String deviceId) {
         List<CascadePublishDTO> rows = new ArrayList<>();
-        if (PlacementScope.DEVICE.equalsIgnoreCase(event.getScope())) {
-            /* 设备自己那一行 + 名下全部通道的发布行：通道是否跟着动由下面逐条对比新旧父节点决定 */
-            String deviceId = event.getObjectKey();
-            rows.addAll(cascadePublishManager.listByObjectKeys(PublishObjectType.DEVICE.name(), List.of(deviceId)));
-            for (CascadePublishDTO row : cascadePublishManager.listByObjectKeyPrefix(
-                PublishObjectType.CHANNEL.name(), deviceId + PublishKeys.CHANNEL_SEPARATOR)) {
-                if (deviceId.equals(PublishKeys.channelDeviceId(row.getObjectKey()))) {
-                    rows.add(row);
-                }
+        /* 通道是否跟着动由下面逐条对比新旧父节点决定，这里只负责把候选捞全 */
+        rows.addAll(cascadePublishManager.listByObjectKeys(PublishObjectType.DEVICE.name(), List.of(deviceId)));
+        for (CascadePublishDTO row : cascadePublishManager.listByObjectKeyPrefix(
+            PublishObjectType.CHANNEL.name(), deviceId + PublishKeys.CHANNEL_SEPARATOR)) {
+            if (deviceId.equals(PublishKeys.channelDeviceId(row.getObjectKey()))) {
+                rows.add(row);
             }
-        } else {
-            rows.addAll(cascadePublishManager.listByObjectKeys(PublishObjectType.CHANNEL.name(),
-                List.of(event.getObjectKey())));
         }
         List<CascadePublishDTO> enabled = new ArrayList<>(rows.size());
         for (CascadePublishDTO row : rows) {
@@ -198,7 +198,7 @@ public class CascadePlacementChangeListener {
         }
 
         List<LocalCascadeCatalogChangeEvent.Node> nodes = new ArrayList<>(
-            channelNodes(platformId, scope, objectKey, previousOrgCode, current, legacy));
+            channelNodes(objectKey, previousOrgCode, current, legacy));
         /* 设备节点只在设备层开着时存在于上级目录：关着还发 DEL 是对不存在的节点做删除 */
         if (platform.useDeviceLayer() && PlacementScope.DEVICE.equalsIgnoreCase(scope)) {
             LocalCascadeCatalogChangeEvent.Node deviceNode = deviceNode(platformId, objectKey,
@@ -213,19 +213,14 @@ public class CascadePlacementChangeListener {
     /**
      * 通道节点：父节点真的变了才删。
      *
-     * <p>设备改组织时只影响<b>跟随设备</b>的通道（自身无组织）；通道自己有组织时第 1 级就命中，
-     * 新旧父相同，自然被过滤掉。用新旧对比而不是「是否跟随」来判断，分母才不会随规则演进而漏。
+     * <p>通道没有自己的组织，父节点只由设备决定；设备换组织时，所有通道的「当前父」都按新归属算，
+     * 「旧父」则是把设备归属盖回旧值。设备层关着时通道直接挂组织、开着时挂设备节点，
+     * 两种形态都由这一条新旧对比覆盖，不需要额外分支。
      */
-    private List<LocalCascadeCatalogChangeEvent.Node> channelNodes(String platformId, String scope,
-        String objectKey, String previousOrgCode, CascadePlacementIndex current, CascadePlacementIndex legacy) {
-        boolean channelScope = PlacementScope.CHANNEL.equalsIgnoreCase(scope);
-        List<CascadePublishDTO> rows;
-        if (channelScope) {
-            rows = cascadePublishManager.listByObjectKeys(PublishObjectType.CHANNEL.name(), List.of(objectKey));
-        } else {
-            rows = cascadePublishManager.listByObjectKeyPrefix(PublishObjectType.CHANNEL.name(),
-                objectKey + PublishKeys.CHANNEL_SEPARATOR);
-        }
+    private List<LocalCascadeCatalogChangeEvent.Node> channelNodes(String objectKey, String previousOrgCode,
+        CascadePlacementIndex current, CascadePlacementIndex legacy) {
+        List<CascadePublishDTO> rows = cascadePublishManager.listByObjectKeyPrefix(
+            PublishObjectType.CHANNEL.name(), objectKey + PublishKeys.CHANNEL_SEPARATOR);
         if (rows.isEmpty()) {
             return new ArrayList<>();
         }
@@ -235,13 +230,10 @@ public class CascadePlacementChangeListener {
                 continue;
             }
             /* 前缀可能捞到脏键：按设备段复核一次，别把别的设备的通道一起删了 */
-            if (!channelScope && !objectKey.equals(channel.getLocalDeviceId())) {
+            if (!objectKey.equals(channel.getLocalDeviceId())) {
                 continue;
             }
-            /* 一次变更只动一个字段：通道换组织盖「自己」，设备换组织盖「设备段」 */
-            CascadeChannelDTO previous = channelScope
-                ? withChannelOwnership(channel, previousOrgCode, channel.getDeviceOrgCode())
-                : withChannelOwnership(channel, channel.getCascadeOrgId(), previousOrgCode);
+            CascadeChannelDTO previous = withDeviceOrgCode(channel, previousOrgCode);
             String oldParent = legacy.resolveChannelParent(previous);
             String newParent = current.resolveChannelParent(channel);
             if (oldParent == null || Objects.equals(oldParent, newParent)) {
@@ -295,16 +287,16 @@ public class CascadePlacementChangeListener {
         return index;
     }
 
-    /** 只覆盖归属字段的副本：父节点解析只读这两处，其余字段原样带过以免误导后续维护。 */
-    private CascadeChannelDTO withChannelOwnership(CascadeChannelDTO source, String ownOrg, String deviceOrg) {
+    /** 只覆盖设备归属编码的副本：通道的父节点解析只读它，其余字段原样带过以免误导后续维护。 */
+    private CascadeChannelDTO withDeviceOrgCode(CascadeChannelDTO source, String deviceOrgCode) {
         CascadeChannelDTO copy = new CascadeChannelDTO();
         copy.setCascadeChannelId(source.getCascadeChannelId());
         copy.setCascadeName(source.getCascadeName());
         copy.setLocalDeviceId(source.getLocalDeviceId());
         copy.setLocalChannelId(source.getLocalChannelId());
         copy.setEnabled(source.getEnabled());
-        copy.setCascadeOrgId(ownOrg);
-        copy.setDeviceOrgCode(deviceOrg);
+        copy.setCascadeOrgId(source.getCascadeOrgId());
+        copy.setDeviceOrgCode(deviceOrgCode);
         return copy;
     }
 

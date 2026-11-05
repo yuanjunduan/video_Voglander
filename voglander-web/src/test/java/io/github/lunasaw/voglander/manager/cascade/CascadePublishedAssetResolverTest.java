@@ -113,17 +113,18 @@ class CascadePublishedAssetResolverTest {
     }
 
     @Test
-    @DisplayName("组织归属按 org_id 翻成编码，通道与设备各取各的")
-    void orgCodesAreResolvedPerOwner() {
+    @DisplayName("通道的组织就是设备的组织：行上残留的 org_id 一律不读")
+    void channelOrgCodesAlwaysFollowDevice() {
         stubPublish(List.of(publish(CHANNEL_ID, "前门")));
+        /* 历史脏值：通道行上还留着组织 2 */
         stubLocalChannel(channel(2L, 1));
         stubDevice(device(1));
         when(cascadeOrgService.list()).thenReturn(List.of(org(1L, "ORG-DEVICE"), org(2L, "ORG-CHANNEL")));
 
         CascadeChannelDTO ch = resolver.listChannels(PLATFORM_ID).get(0);
 
-        assertEquals("ORG-CHANNEL", ch.getCascadeOrgId(), "通道自己的归属优先");
-        assertEquals("ORG-DEVICE", ch.getDeviceOrgCode(), "设备归属留给组装器决定挂设备还是挂组织");
+        assertEquals("ORG-DEVICE", ch.getCascadeOrgId(), "通道跟着设备走，行上的 org_id 不再参与");
+        assertEquals("ORG-DEVICE", ch.getDeviceOrgCode(), "两个字段同源：一个对外口径，一个父节点解析输入");
     }
 
     @Test

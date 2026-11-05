@@ -571,8 +571,7 @@ public class CascadeOrgManager {
         long devices = deviceManager.countByOrgId(id);
         Assert.isTrue(devices == 0, "该组织下还有 " + devices + " 台设备，请先把设备迁到其他组织或留空");
 
-        long channels = countOccupiedChannels(id);
-        Assert.isTrue(channels == 0, "该组织下还有 " + channels + " 路通道，请先把通道迁到其他组织或留空");
+        /* 不再单独校验通道：通道没有独立归属，设备迁走时它们整体跟着走，设备数为 0 就已无占用 */
 
         /* 撤销内部会清掉发布行：本地都查不到编码了，上级目录必须先跟着干净 */
         cascadeAssetCleanup.revokeOrg(existed.getOrgCode());
@@ -1660,8 +1659,7 @@ public class CascadeOrgManager {
      * 而不是查 {@code tb_cascade_channel}。两套判断会让「推上去的目录」与「删掉的目录」各自成立却对不上——
      * 组装器认为不存在的通道不会出现在上级目录里，这里却发 DEL；反过来漏发则留下孤儿节点。
      *
-     * <p>归属取通道<b>自己</b>的组织，为空时回落设备归属组织：两者都不在子树内，说明该通道
-     * 本就不受这个组织停用影响。
+     * <p>归属只看设备：通道跟着设备走，设备的组织不在子树内，说明该通道本就不受这个组织停用影响。
      */
     private List<CascadeChannelDTO> listEffectiveChannels(String platformId, List<CascadeOrgDTO> subtree) {
         Set<String> codes = subtree.stream()
@@ -1676,9 +1674,9 @@ public class CascadeOrgManager {
             .collect(java.util.stream.Collectors.toList());
     }
 
-    /** 通道的归属组织编码：通道自己的归属优先，为空时跟随设备（设备层 / 设备的组织）。 */
+    /** 通道的归属组织编码：只有设备归属，通道没有自己的一份。 */
     private String ownershipOf(CascadeChannelDTO channel) {
-        return StringUtils.defaultIfBlank(channel.getCascadeOrgId(), channel.getDeviceOrgCode());
+        return channel.getDeviceOrgCode();
     }
 
     /**
@@ -1808,8 +1806,8 @@ public class CascadeOrgManager {
     /**
      * 直属通道数（按本地资产层口径，key = 组织主键）。
      *
-     * <p>「直属」包含两种情况：通道自己归属该组织（GB28181 业务分组直挂摄像机），
-     * 以及通道未显式归属、跟随所属设备归属该组织。这正是上级目录里挂在组织节点下的通道。
+     * <p>通道没有独立的组织归属，全部跟随设备：某组织下的通道数 = 归属该组织的设备名下的通道数。
+     * 通道行上残留的 {@code org_id} 不参与统计——留着两套口径会让组织树上的数字与上级目录对不上。
      */
     private Map<Long, Long> countChannelsByOrgId() {
         Map<Long, Long> counts = new HashMap<>();
@@ -1819,25 +1817,13 @@ public class CascadeOrgManager {
                 orgIdByDeviceId.put(device.getDeviceId(), device.getOrgId());
             }
         }
-        for (DeviceChannelDO channel : deviceChannelManager.listOrgLinkProjection()) {
-            Long orgId = channel.getOrgId() != null ? channel.getOrgId() : orgIdByDeviceId.get(channel.getDeviceId());
+        for (DeviceChannelDO channel : deviceChannelManager.listDeviceChannelProjection()) {
+            Long orgId = orgIdByDeviceId.get(channel.getDeviceId());
             if (orgId != null) {
                 counts.merge(orgId, 1L, Long::sum);
             }
         }
         return counts;
-    }
-
-    /**
-     * 某组织下的通道占用数：显式归属该组织的通道 + 归属该组织的设备下未显式归属的通道。
-     *
-     * <p>删除组织前必须两边都数——只数显式归属会放过"设备挂在这、通道跟着设备"的绝大多数场景。
-     */
-    private long countOccupiedChannels(Long orgId) {
-        long direct = deviceChannelManager.countByOrgId(orgId);
-        long inherited = deviceChannelManager.countUnownedByDeviceIds(
-            deviceManager.listDeviceIdsByOrgId(orgId));
-        return direct + inherited;
     }
 
     /**

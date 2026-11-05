@@ -77,6 +77,12 @@ class CascadeChannelCodeRuleTest extends BaseTest {
     private record ChannelRef(Long pk, String deviceId, String channelId) {
     }
 
+    /**
+     * 建一台归属 {@code orgId} 的设备，并挂一条通道。
+     *
+     * <p><b>组织要设在设备上</b>：通道没有独立归属，编码规则的「组织段」从设备的组织推导；
+     * 给通道设 {@code orgId} 会被写入侧摘掉，用例会退化成「组织规则没开」的假失败。
+     */
     private ChannelRef newChannel(Long orgId) {
         String deviceId = UniqueKeyFactory.deviceId();
         DeviceDTO device = new DeviceDTO();
@@ -86,6 +92,7 @@ class CascadeChannelCodeRuleTest extends BaseTest {
         device.setType(1);
         device.setServerIp("127.0.0.1");
         device.setName("dev-通道编码");
+        device.setOrgId(orgId);
         deviceManager.add(device);
 
         String channelId = UniqueKeyFactory.channelId();
@@ -93,7 +100,6 @@ class CascadeChannelCodeRuleTest extends BaseTest {
         channel.setDeviceId(deviceId);
         channel.setChannelId(channelId);
         channel.setName("ch-通道编码");
-        channel.setOrgId(orgId);
         return new ChannelRef(deviceChannelManager.add(channel), deviceId, channelId);
     }
 
