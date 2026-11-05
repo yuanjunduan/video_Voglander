@@ -49,6 +49,8 @@ public class CascadeClientScheduler {
     private final CascadeDeviceSupplier   cascadeDeviceSupplier;
     private final CascadePeerAliveTracker peerAliveTracker;
     private final CascadeUnregisterService cascadeUnregisterService;
+    /** SSE 发布点：超时/发送异常这两类失败只有本调度器知道，必须自己推，前端才能及时收尾 */
+    private final CascadeRegisterStatusPublisher registerStatusPublisher;
 
     /** REGISTER 发出后等待成功/失败事件的最长时间，超时仍为 REGISTERING 则转 FAILED。 */
     @Value("${gateway.cascade.register-timeout-sec:" + CascadeConstant.DEFAULT_REGISTER_TIMEOUT_SEC + "}")
@@ -235,6 +237,7 @@ public class CascadeClientScheduler {
                 platform.getPlatformId(), target, platform.getLocalClientId(), e.getMessage(), e);
             cascadePlatformManager.updateRegisterStatus(platform.getId(), CascadeConstant.RegisterStatus.FAILED);
             markRegisterFailure(platform, "发送 REGISTER 异常: " + e.getMessage());
+            publishRegisterStatus(platform, CascadeConstant.RegisterStatus.FAILED);
         }
     }
 
@@ -249,12 +252,36 @@ public class CascadeClientScheduler {
                         platform.getPlatformIp(), platform.getPlatformPort(), callId, timeout);
                     cascadePlatformManager.updateRegisterStatus(platform.getId(), CascadeConstant.RegisterStatus.FAILED);
                     markRegisterFailure(platform, "REGISTER 响应超时(" + timeout + "s)");
+                    /* 与 4xx 失败一样推一条：否则页面的「注册中」loading(duration=0) 永远不关，只能等 15s 轮询 */
+                    publishRegisterStatus(platform, CascadeConstant.RegisterStatus.FAILED);
                 }
             } catch (Exception e) {
                 log.warn("级联注册超时检查失败: platformId={}, callId={}, err={}",
                     platform.getPlatformId(), callId, e.getMessage());
             }
         }, timeout, TimeUnit.SECONDS);
+    }
+
+    /**
+     * 推送注册状态到 SSE topic {@code cascade.register}。
+     *
+     * <p>投递失败只告警：本方法在注册续期任务（{@code scheduleWithFixedDelay}）里被调用，
+     * 异常抛出去会被执行器当作任务失败并永久取消该平台的续期，SSE 只是可见性，不能反向打死注册。
+     *
+     * @param platform       出状态的平台
+     * @param registerStatus 注册状态（0 离线 / 1 在线 / 2 注册中 / 3 失败）
+     */
+    private void publishRegisterStatus(CascadePlatformDTO platform, int registerStatus) {
+        String platformId = platform == null ? null : platform.getPlatformId();
+        if (platformId == null) {
+            return;
+        }
+        try {
+            registerStatusPublisher.publish(platformId, registerStatus);
+        } catch (Exception e) {
+            log.warn("级联注册状态推送失败: platformId={}, registerStatus={}, err={}",
+                platformId, registerStatus, e.getMessage());
+        }
     }
 
     /* ------------------------------------------------------------------ */

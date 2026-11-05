@@ -36,6 +36,7 @@ class CascadeClientSchedulerTest {
     @Mock  CascadeDeviceSupplier  cascadeDeviceSupplier;
     @Mock  io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadePeerAliveTracker peerAliveTracker;
     @Mock  io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeUnregisterService cascadeUnregisterService;
+    @Mock  io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeRegisterStatusPublisher registerStatusPublisher;
     @InjectMocks CascadeClientScheduler scheduler;
 
     private CascadePlatformDTO platform(Long id, String platformId) {

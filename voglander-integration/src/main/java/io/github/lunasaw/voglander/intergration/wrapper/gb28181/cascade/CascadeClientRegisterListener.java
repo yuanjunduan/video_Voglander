@@ -1,18 +1,13 @@
 package io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade;
 
-import java.util.HashMap;
-import java.util.Map;
-
 import io.github.lunasaw.gbproxy.client.eventbus.event.ClientRegisterSuccessEvent;
 import io.github.lunasaw.gbproxy.client.eventbus.event.ClientRegisterFailureEvent;
 import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant;
-import io.github.lunasaw.voglander.common.event.SseRelayEvent;
 import io.github.lunasaw.voglander.manager.manager.CascadePlatformManager;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
@@ -26,7 +21,7 @@ import org.springframework.stereotype.Component;
 public class CascadeClientRegisterListener {
 
     private final CascadePlatformManager    cascadePlatformManager;
-    private final ApplicationEventPublisher eventPublisher;
+    private final CascadeRegisterStatusPublisher registerStatusPublisher;
     private final CascadeClientScheduler    cascadeClientScheduler;
     private final CascadeUnregisterService  cascadeUnregisterService;
 
@@ -47,7 +42,7 @@ public class CascadeClientRegisterListener {
         if (cascadeUnregisterService.isUnregistering(platform.getPlatformId())) {
             cascadeUnregisterService.clear(platform.getPlatformId());
             cascadePlatformManager.updateRegisterStatus(platform.getId(), CascadeConstant.RegisterStatus.OFFLINE);
-            publishRegisterStatus(platform.getPlatformId(), CascadeConstant.RegisterStatus.OFFLINE);
+            registerStatusPublisher.publish(platform.getPlatformId(), CascadeConstant.RegisterStatus.OFFLINE);
             log.info("级联注销已完成(Expires=0): platformId={}, localClientId={}, target={}:{}",
                 platform.getPlatformId(), platform.getLocalClientId(),
                 platform.getPlatformIp(), platform.getPlatformPort());
@@ -56,7 +51,7 @@ public class CascadeClientRegisterListener {
 
         cascadePlatformManager.updateRegisterStatus(platform.getId(), CascadeConstant.RegisterStatus.ONLINE);
         cascadeClientScheduler.markRegisterSuccess(platform);
-        publishRegisterStatus(platform.getPlatformId(), CascadeConstant.RegisterStatus.ONLINE);
+        registerStatusPublisher.publish(platform.getPlatformId(), CascadeConstant.RegisterStatus.ONLINE);
         log.info("级联注册成功: eventUserId={}, platformId={}, localClientId={}, target={}:{}, peerProtocolVersion={}",
             eventUserId, platform.getPlatformId(), platform.getLocalClientId(),
             platform.getPlatformIp(), platform.getPlatformPort(), event.getPeerProtocolVersion());
@@ -94,7 +89,7 @@ public class CascadeClientRegisterListener {
             /* 失败原因落 extend + 安排退避重试：401/403 多为 localClientId 或密码不匹配，排查提示直接给出 */
             String reason = "REGISTER 失败 statusCode=" + event.getStatusCode() + suggestByStatusCode(event.getStatusCode());
             cascadeClientScheduler.markRegisterFailure(platform, reason);
-            publishRegisterStatus(platform.getPlatformId(), CascadeConstant.RegisterStatus.FAILED);
+            registerStatusPublisher.publish(platform.getPlatformId(), CascadeConstant.RegisterStatus.FAILED);
             log.warn("级联注册失败: eventUserId={}, platformId={}, localClientId={}@{}:{}, target={}:{}, statusCode={}, reason={}",
                 eventUserId, platform.getPlatformId(), platform.getLocalClientId(),
                 platform.getLocalIp(), platform.getLocalPort(),
@@ -133,19 +128,5 @@ public class CascadeClientRegisterListener {
         }
         CascadePlatformDTO platform = cascadePlatformManager.getByPlatformId(eventUserId);
         return platform != null ? platform : cascadePlatformManager.getByLocalClientId(eventUserId);
-    }
-
-    /**
-     * 推送注册状态变更到 SSE topic {@code cascade.register}。
-     *
-     * @param platformId     上级平台国标 ID
-     * @param registerStatus 注册状态（0离线 1在线 2注册中 3失败）
-     */
-    private void publishRegisterStatus(String platformId, int registerStatus) {
-        Map<String, Object> data = new HashMap<>();
-        data.put("platformId", platformId);
-        data.put("registerStatus", registerStatus);
-        data.put("ts", System.currentTimeMillis());
-        eventPublisher.publishEvent(new SseRelayEvent("cascade.register", data));
     }
 }

@@ -13,12 +13,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.context.ApplicationEventPublisher;
 
 import io.github.lunasaw.gbproxy.client.eventbus.event.ClientRegisterFailureEvent;
 import io.github.lunasaw.gbproxy.client.eventbus.event.ClientRegisterSuccessEvent;
 import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant;
-import io.github.lunasaw.voglander.common.event.SseRelayEvent;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadePlatformManager;
 
@@ -33,7 +31,7 @@ class CascadeClientRegisterListenerTest {
     private CascadePlatformManager    cascadePlatformManager;
 
     @Mock
-    private ApplicationEventPublisher eventPublisher;
+    private CascadeRegisterStatusPublisher registerStatusPublisher;
 
     @Mock
     private CascadeClientScheduler    cascadeClientScheduler;
@@ -51,8 +49,8 @@ class CascadeClientRegisterListenerTest {
 
     @BeforeEach
     void setUp() {
-        listener = new CascadeClientRegisterListener(cascadePlatformManager, eventPublisher, cascadeClientScheduler,
-            cascadeUnregisterService, notifyPublisherProvider);
+        listener = new CascadeClientRegisterListener(cascadePlatformManager, registerStatusPublisher,
+            cascadeClientScheduler, cascadeUnregisterService, notifyPublisherProvider);
     }
 
     private CascadePlatformDTO platform() {
@@ -74,7 +72,7 @@ class CascadeClientRegisterListenerTest {
         verify(cascadePlatformManager).updateRegisterStatus(7L, CascadeConstant.RegisterStatus.ONLINE);
         verify(cascadeClientScheduler).markRegisterSuccess(any(CascadePlatformDTO.class));
         verify(cascadePlatformManager, never()).getByLocalClientId(any());
-        verify(eventPublisher).publishEvent(any(SseRelayEvent.class));
+        verify(registerStatusPublisher).publish(PLATFORM_ID, CascadeConstant.RegisterStatus.ONLINE);
         /* 应用重启后上级的订阅可能仍在有效期、不会重发 SUBSCRIBE，靠这一包恢复目录可见性 */
         verify(notifyPublisher).pushCatalogSnapshot(PLATFORM_ID, null);
     }
@@ -100,6 +98,6 @@ class CascadeClientRegisterListenerTest {
 
         verify(cascadePlatformManager).updateRegisterStatus(7L, CascadeConstant.RegisterStatus.FAILED);
         verify(cascadeClientScheduler).markRegisterFailure(any(CascadePlatformDTO.class), contains("statusCode=403"));
-        verify(eventPublisher).publishEvent(any(SseRelayEvent.class));
+        verify(registerStatusPublisher).publish(PLATFORM_ID, CascadeConstant.RegisterStatus.FAILED);
     }
 }

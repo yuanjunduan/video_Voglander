@@ -56,6 +56,9 @@ class CascadeClientSchedulerTest {
     @Mock
     private CascadeUnregisterService cascadeUnregisterService;
 
+    @Mock
+    private CascadeRegisterStatusPublisher registerStatusPublisher;
+
     private CascadeClientScheduler  scheduler;
 
     @AfterEach
@@ -71,7 +74,7 @@ class CascadeClientSchedulerTest {
      */
     private CascadeClientScheduler newScheduler() {
         return new CascadeClientScheduler(cascadePlatformManager, cascadeDeviceSupplier,
-            peerAliveTracker, cascadeUnregisterService);
+            peerAliveTracker, cascadeUnregisterService, registerStatusPublisher);
     }
 
     @Test
@@ -134,6 +137,28 @@ class CascadeClientSchedulerTest {
 
         verify(cascadePlatformManager, atLeastOnce())
             .updateRegisterStatus(2L, CascadeConstant.RegisterStatus.FAILED);
+        /* 超时是最常见的「点了启用一直转圈」来源：不推 SSE 页面 loading 永不关闭 */
+        verify(registerStatusPublisher, timeout(2000))
+            .publish("PF2", CascadeConstant.RegisterStatus.FAILED);
+    }
+
+    @Test
+    @DisplayName("发送 REGISTER 抛异常 → 标记 FAILED 并推 SSE，否则页面 loading 永不关闭")
+    void sendException_should_mark_failed_and_publish() {
+        CascadePlatformDTO dto = platform(3L, null);
+        dto.setRegisterStatus(CascadeConstant.RegisterStatus.REGISTERING);
+
+        lenient().when(cascadePlatformManager.getById(3L)).thenReturn(dto);
+        when(cascadeDeviceSupplier.buildFromDevice(dto))
+            .thenThrow(new IllegalStateException("SIP 尚未初始化"));
+
+        scheduler = newScheduler();
+        scheduler.startPlatform(dto);
+
+        verify(cascadePlatformManager, timeout(2000))
+            .updateRegisterStatus(3L, CascadeConstant.RegisterStatus.FAILED);
+        verify(registerStatusPublisher, timeout(2000))
+            .publish(PLATFORM_ID, CascadeConstant.RegisterStatus.FAILED);
     }
 
     @Test
