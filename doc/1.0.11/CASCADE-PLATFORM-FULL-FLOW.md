@@ -1,5 +1,10 @@
 # 级联上级平台：完整链路流程图（1.0.11）
 
+> **注册部分已由新文档取代**：`doc/architecture/current/CASCADE-PLATFORM-REGISTER-FLOW.md`
+> （当前事实源，含页面请求参数、401 重认证的实际实现、心跳超时自愈、报文样例与排障矩阵）。
+> 本文中「框架 handleUnauthorizedResponse 用 localClientId 重认证」「无心跳超时自愈」等描述已过时，
+> 保留下来仅作演进记录；注册完成之后的目录/订阅/点播链路仍以本文为准。
+
 > 目的：从"点保存"到"上级能点播"，把注册、注册中、注册完成以及完成之后的每一步落到具体类与表，便于熟悉链路和排障。
 >
 > 相关文档：`doc/1.0.11/CASCADE-PLATFORM-SECURITY-HARDENING.md`（安全整改）、`doc/1.0.8/GB28181-CASCADE-CLIENT-TECH-PLAN.md`（协议方案）
