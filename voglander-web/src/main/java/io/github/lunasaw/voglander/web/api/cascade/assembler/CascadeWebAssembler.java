@@ -59,6 +59,7 @@ public class CascadeWebAssembler {
         dto.setPlatformIp(req.getPlatformIp());
         dto.setPlatformPort(req.getPlatformPort());
         dto.setPlatformDomain(req.getPlatformDomain());
+        dto.setPlatformName(req.getPlatformName());
         dto.setUsername(req.getUsername());
         dto.setPassword(req.getPassword());
         dto.setLocalClientId(req.getLocalClientId());
@@ -88,6 +89,8 @@ public class CascadeWebAssembler {
         dto.setPlatformIp(req.getPlatformIp());
         dto.setPlatformPort(req.getPlatformPort());
         dto.setPlatformDomain(req.getPlatformDomain());
+        /* 名称三态：null=不改，空串=清空为未命名（列是 NOT NULL DEFAULT ''，空串能落库） */
+        dto.setPlatformName(req.getPlatformName());
         dto.setUsername(req.getUsername());
         dto.setPassword(req.getPassword());
         dto.setLocalClientId(req.getLocalClientId());
@@ -146,6 +149,7 @@ public class CascadeWebAssembler {
         if (req == null) {
             return dto;
         }
+        dto.setPlatformName(req.getPlatformName());
         dto.setPlatformId(req.getPlatformId());
         dto.setPlatformIp(req.getPlatformIp());
         dto.setEnabled(req.getEnabled());

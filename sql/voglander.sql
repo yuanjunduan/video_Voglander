@@ -768,6 +768,7 @@ CREATE TABLE `tb_cascade_platform`
     `platform_ip`        VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '上级IP',
     `platform_port`      INT                                                   NOT NULL COMMENT '上级端口',
     `platform_domain`    VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '上级域',
+    `platform_name`      VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '' COMMENT '平台名称(本地辨识用，空=未命名)',
     `username`           VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '' COMMENT '注册用户名',
     `password`           VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '' COMMENT '注册密码',
     `local_client_id`    VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '本地模拟客户端ID',

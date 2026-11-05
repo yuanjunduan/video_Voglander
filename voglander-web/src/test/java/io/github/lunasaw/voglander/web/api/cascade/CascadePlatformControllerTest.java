@@ -353,6 +353,37 @@ class CascadePlatformControllerTest {
             "34".equals(d.getCodeProvince()) && "0".equals(d.getCodeNetwork())));
     }
 
+    /* ---------------- 平台名称 ---------------- */
+
+    @Test
+    @DisplayName("新增：平台名称随请求透传到 Manager（trim 由 Manager 落库前统一处理）")
+    void add_passes_platform_name() throws Exception {
+        when(cascadePlatformManager.add(any(CascadePlatformDTO.class))).thenReturn(92L);
+        when(cascadePlatformManager.getById(92L)).thenReturn(platform(92L, 1));
+
+        mvc.perform(post("/api/v1/cascade/platform")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"platformId\":\"" + PLATFORM_ID + "\",\"platformIp\":\"10.0.0.1\","
+                + "\"platformPort\":5060,\"localClientId\":\"" + LOCAL_CLIENT_ID + "\","
+                + "\"platformName\":\"  市公安局上级平台  \"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data").value(92));
+
+        verify(cascadePlatformManager).add(argThat(d -> "  市公安局上级平台  ".equals(d.getPlatformName())));
+    }
+
+    @Test
+    @DisplayName("详情：名称原样回显，空串不归一为 null（否则清空写入会变「不改」）")
+    void vo_keeps_blank_name_as_empty_string() {
+        CascadePlatformDTO unnamed = platform(5L, 1);
+        unnamed.setPlatformName("");
+        assertEquals("", CascadePlatformVO.convertVO(unnamed).getPlatformName());
+
+        CascadePlatformDTO named = platform(5L, 1);
+        named.setPlatformName("市公安局上级平台");
+        assertEquals("市公安局上级平台", CascadePlatformVO.convertVO(named).getPlatformName());
+    }
+
     /* ---------------- 辅助 ---------------- */
 
     private static CascadePlatformDTO platform(Long id, Integer enabled) {

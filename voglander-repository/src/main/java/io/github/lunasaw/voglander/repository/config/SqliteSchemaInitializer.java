@@ -93,6 +93,9 @@ public class SqliteSchemaInitializer {
     private SqliteCascadePlatformLayerMigrator       cascadePlatformLayerMigrator;
 
     @Autowired(required = false)
+    private SqliteCascadePlatformNameMigrator        cascadePlatformNameMigrator;
+
+    @Autowired(required = false)
     private SqliteCascadeCodingSchemaMigrator        cascadeCodingSchemaMigrator;
 
     @Autowired(required = false)
@@ -141,6 +144,7 @@ public class SqliteSchemaInitializer {
                 migrateCascadeChannelMetaSchema();
                 migrateCascadeAssetSchema();
                 migrateCascadePlatformLayerSchema();
+                migrateCascadePlatformNameSchema();
                 migrateCascadeCodingSchema();
                 migrateCascadePublishCodeSourceSchema();
                 migrateCascadeChannelPublishSchema();
@@ -169,6 +173,7 @@ public class SqliteSchemaInitializer {
             migrateCascadeChannelMetaSchema();
             migrateCascadeAssetSchema();
             migrateCascadePlatformLayerSchema();
+            migrateCascadePlatformNameSchema();
             migrateCascadeCodingSchema();
             migrateCascadePublishCodeSourceSchema();
             migrateCascadeChannelPublishSchema();
@@ -299,6 +304,21 @@ public class SqliteSchemaInitializer {
         SqliteCascadePlatformLayerMigrator migrator = cascadePlatformLayerMigrator;
         if (migrator == null) {
             migrator = new SqliteCascadePlatformLayerMigrator();
+            migrator.setDataSource(dataSource);
+        }
+        migrator.migrate();
+    }
+
+    /**
+     * 级联平台名称列的幂等补齐（1.10.4：{@code platform_name}）。
+     *
+     * <p>与 {@link #migrateCascadePlatformLayerSchema()} 同一张表，但迁移键是「跑过就跳过」，
+     * 那一支的键早已在大量库上登记，合进去就补不上新列。名称只用于本地辨识，不进 GB28181 报文。
+     */
+    private void migrateCascadePlatformNameSchema() {
+        SqliteCascadePlatformNameMigrator migrator = cascadePlatformNameMigrator;
+        if (migrator == null) {
+            migrator = new SqliteCascadePlatformNameMigrator();
             migrator.setDataSource(dataSource);
         }
         migrator.migrate();

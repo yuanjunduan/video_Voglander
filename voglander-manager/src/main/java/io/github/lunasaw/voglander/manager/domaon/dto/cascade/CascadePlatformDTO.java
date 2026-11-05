@@ -16,6 +16,8 @@ public class CascadePlatformDTO {
     private String        platformIp;
     private Integer       platformPort;
     private String        platformDomain;
+    /** 平台名称：只用于本地辨识，GB28181 报文里用的是 {@code platformId}；空=未命名 */
+    private String        platformName;
     private String        username;
     private String        password;
     private String        localClientId;

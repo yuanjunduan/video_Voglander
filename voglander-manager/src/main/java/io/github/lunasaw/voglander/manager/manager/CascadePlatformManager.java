@@ -44,6 +44,9 @@ public class CascadePlatformManager {
         doObj.setCodeCounty(StringUtils.trimToNull(dto.getCodeCounty()));
         doObj.setCodeIndustry(StringUtils.trimToNull(dto.getCodeIndustry()));
         doObj.setCodeNetwork(StringUtils.trimToNull(dto.getCodeNetwork()));
+        /* 名称只 trim 不 trimToNull：空串是合法的「未命名」状态，列本身 NOT NULL DEFAULT ''，
+           统一落空串比落 NULL 更贴近读回口径（前端一律 name || platformId 回落） */
+        doObj.setPlatformName(StringUtils.trim(dto.getPlatformName()));
         cascadePlatformService.save(doObj);
         return doObj.getId();
     }
@@ -94,6 +97,8 @@ public class CascadePlatformManager {
             }
         }
         CascadePlatformDO update = CascadeAssembler.toDO(dto);
+        /* 名称不需要二次收口：null 被 updateById 跳过（不改），空串能直接落库（清空），
+           与编码段那种「未配置必须归一成 NULL」的字段不是一类问题 */
         boolean updated = cascadePlatformService.updateById(update);
         /* 五段再收口一次：updateById 的 null 是「不改」，写不出「清空」，理由见 normalizeSubmittedSegments */
         normalizeSubmittedSegments(dto);
@@ -206,6 +211,8 @@ public class CascadePlatformManager {
         if (query != null) {
             qw.eq(query.getPlatformId() != null, CascadePlatformDO::getPlatformId, query.getPlatformId());
             qw.like(query.getPlatformIp() != null, CascadePlatformDO::getPlatformIp, query.getPlatformIp());
+            qw.like(StringUtils.isNotBlank(query.getPlatformName()), CascadePlatformDO::getPlatformName,
+                StringUtils.trim(query.getPlatformName()));
             qw.eq(query.getEnabled() != null, CascadePlatformDO::getEnabled, query.getEnabled());
             qw.eq(query.getRegisterStatus() != null, CascadePlatformDO::getRegisterStatus, query.getRegisterStatus());
         }

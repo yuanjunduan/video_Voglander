@@ -62,6 +62,14 @@ public class CascadePlatformUpdateReq implements Serializable {
     private String  platformDomain;
 
     /**
+     * 平台名称（选填）：只用于本地辨识，GB28181 报文里用的是 platformId。
+     *
+     * <p>三态：{@code null}=不改，空串（或纯空白）=清空为未命名，其余按 trim 后的值保存。
+     */
+    @Size(max = 128, message = "平台名称长度不能超过 128")
+    private String  platformName;
+
+    /**
      * 认证用户名（仅存库展示，SIP 摘要鉴权使用 localClientId）
      */
     @Size(max = 64, message = "认证用户名长度不能超过 64")

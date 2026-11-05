@@ -221,6 +221,24 @@ class CascadePlatformReqValidationTest {
         assertEquals("行业编码必须为 2 位数字", messages(req));
     }
 
+    @Test
+    @DisplayName("平台名称选填：不传、空串都合法")
+    void platform_name_optional() {
+        assertTrue(violations(validCreate()).isEmpty());
+
+        CascadePlatformCreateReq blank = validCreate();
+        blank.setPlatformName("");
+        assertTrue(violations(blank).isEmpty(), "空串是合法的「未命名」，不能在入口就被拦");
+    }
+
+    @Test
+    @DisplayName("平台名称超 128 字时拦截（超出列宽会在落库时报错）")
+    void platform_name_too_long() {
+        CascadePlatformCreateReq req = validCreate();
+        req.setPlatformName("名".repeat(129));
+        assertEquals("平台名称长度不能超过 128", messages(req));
+    }
+
     /* ---------------- 更新 ---------------- */
 
     @Test

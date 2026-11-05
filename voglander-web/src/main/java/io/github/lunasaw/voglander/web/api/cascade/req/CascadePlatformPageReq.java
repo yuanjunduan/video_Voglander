@@ -16,6 +16,11 @@ public class CascadePlatformPageReq implements Serializable {
     private static final long serialVersionUID = 1L;
 
     /**
+     * 平台名称（模糊匹配）：列表里多个平台并排时按名字找
+     */
+    private String  platformName;
+
+    /**
      * 上级平台国标 ID（精确匹配）
      */
     private String  platformId;

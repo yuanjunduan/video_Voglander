@@ -60,6 +60,14 @@ public class CascadePlatformVO implements Serializable {
     private String  platformDomain;
 
     /**
+     * 平台名称：本地辨识用，空串=未命名（前端回落显示平台ID）。
+     *
+     * <p>这里刻意不归一成 null：编辑弹窗回填空串，用户清空后直接回传空串即可清掉名字；
+     * 若归一成 null，而写入侧「null=不改」，清空会静默失效。
+     */
+    private String  platformName;
+
+    /**
      * 认证用户名
      */
     private String  username;
@@ -205,6 +213,7 @@ public class CascadePlatformVO implements Serializable {
         vo.setPlatformIp(dto.getPlatformIp());
         vo.setPlatformPort(dto.getPlatformPort());
         vo.setPlatformDomain(dto.getPlatformDomain());
+        vo.setPlatformName(dto.getPlatformName());
         vo.setUsername(dto.getUsername());
         /* 密码不回传：编辑时留空由后端保留原值 */
         vo.setLocalClientId(dto.getLocalClientId());

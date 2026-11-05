@@ -751,6 +751,8 @@ CREATE TABLE tb_cascade_platform
     platform_ip        VARCHAR(64)                            NOT NULL,
     platform_port      INTEGER                                NOT NULL,
     platform_domain    VARCHAR(64)                            NOT NULL,
+    -- 平台名称：只用于本地辨识（上级报文里用的是 platform_id），空=未命名
+    platform_name      VARCHAR(128) DEFAULT ''                NOT NULL,
     username           VARCHAR(64)  DEFAULT ''                NOT NULL,
     password           VARCHAR(128) DEFAULT ''                NOT NULL,
     local_client_id    VARCHAR(64)                            NOT NULL,

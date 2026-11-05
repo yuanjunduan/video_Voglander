@@ -668,6 +668,7 @@ CREATE TABLE tb_cascade_platform
     platform_ip        VARCHAR(64) NOT NULL,
     platform_port      INT                                                   NOT NULL,
     platform_domain    VARCHAR(64) NOT NULL,
+    platform_name      VARCHAR(128) NOT NULL DEFAULT '',
     username           VARCHAR(64) NOT NULL DEFAULT '',
     password           VARCHAR(128) NOT NULL DEFAULT '',
     local_client_id    VARCHAR(64) NOT NULL,
@@ -692,6 +693,7 @@ CREATE TABLE tb_cascade_platform
     PRIMARY KEY (id),
     UNIQUE (platform_id)
 );
+COMMENT ON COLUMN tb_cascade_platform.platform_name IS '平台名称(本地辨识用，空=未命名)';
 COMMENT ON COLUMN tb_cascade_platform.catalog_with_device_layer IS '目录是否带设备层 0=虚拟组织(通道直挂组织) 1=域/组织/设备/通道';
 COMMENT ON COLUMN tb_cascade_platform.code_province IS '平台编码规则-省编码(2位)';
 COMMENT ON COLUMN tb_cascade_platform.code_city IS '平台编码规则-市编码(2位)';
