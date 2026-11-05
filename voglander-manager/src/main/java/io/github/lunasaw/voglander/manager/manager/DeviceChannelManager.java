@@ -6,7 +6,10 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.luna.common.check.Assert;
+import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.PlacementScope;
+import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.PublishKeys;
 import io.github.lunasaw.voglander.common.constant.device.DeviceConstant;
+import io.github.lunasaw.voglander.common.event.LocalCascadePlacementChangeEvent;
 import io.github.lunasaw.voglander.common.exception.ServiceException;
 import io.github.lunasaw.voglander.common.exception.ServiceExceptionEnum;
 import io.github.lunasaw.voglander.manager.assembler.DeviceChannelAssembler;
@@ -22,6 +25,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.CacheManager;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -107,6 +111,13 @@ public class DeviceChannelManager {
 
     @Autowired
     private CacheManager           cacheManager;
+
+    /**
+     * 归属变更广播：上级目录不会因为「节点这次没出现在快照里」就删掉它，
+     * 所以改组织以后必须显式通知一次旧位置。
+     */
+    @Autowired
+    private ApplicationEventPublisher eventPublisher;
 
     @Value("${voglander.device-channel.cascade-offline-batch-size:500}")
     private int    cascadeOfflineBatchSize;
@@ -518,7 +529,13 @@ public class DeviceChannelManager {
         deviceChannelDO.setUpdateTime(LocalDateTime.now());
 
         // 调用统一入口方法
-        return deviceChannelInternal(deviceChannelDO, "更新设备通道");
+        Long result = deviceChannelInternal(deviceChannelDO, "更新设备通道");
+        /* 这里的 orgId 直接落库（不经 update 的 0→NULL 归一），因此直接拿入参比：
+           0 在解析层与 null 等价（查不到编码 → 视为无归属），不会误报 */
+        publishPlacementChange(existingChannel.getDeviceId(), existingChannel.getChannelId(),
+            existingChannel.getOrgId(),
+            deviceChannelDTO.getOrgId() == null ? existingChannel.getOrgId() : deviceChannelDTO.getOrgId());
+        return result;
     }
 
     /**
@@ -883,6 +900,11 @@ public class DeviceChannelManager {
 
             String newKey = buildDeviceChannelKey(updateDO.getDeviceId(), updateDO.getChannelId());
             clearCache(updateDO.getId(), oldKey, newKey);
+            /* 归属变了要告知上级换位置：快照是增量 upsert，旧组织下那份不会自己消失 */
+            publishPlacementChange(existingRecord.getDeviceId(), existingRecord.getChannelId(),
+                existingRecord.getOrgId(),
+                updateDTO.getOrgId() == null ? existingRecord.getOrgId()
+                    : (updateDTO.getOrgId() == 0L ? null : updateDTO.getOrgId()));
 
             return updateDO.getId();
         } catch (ServiceException e) {
@@ -1146,6 +1168,21 @@ public class DeviceChannelManager {
             .eq(DeviceChannelDO::getId, id)
             .set(DeviceChannelDO::getOrgId, null)
             .update();
+    }
+
+    /**
+     * 归属真的变了才广播。
+     *
+     * <p>广播用发布行业务键（{@code deviceId:channelId}）而不是自增主键：监听器要拿它去查
+     * {@code tb_cascade_publish}，两边必须同口径。
+     */
+    private void publishPlacementChange(String deviceId, String channelId, Long previousOrgId, Long currentOrgId) {
+        if (eventPublisher == null || StringUtils.isBlank(deviceId) || StringUtils.isBlank(channelId)
+            || Objects.equals(previousOrgId, currentOrgId)) {
+            return;
+        }
+        eventPublisher.publishEvent(new LocalCascadePlacementChangeEvent(PlacementScope.CHANNEL,
+            PublishKeys.channel(deviceId, channelId), previousOrgId, currentOrgId));
     }
 
     // ================================

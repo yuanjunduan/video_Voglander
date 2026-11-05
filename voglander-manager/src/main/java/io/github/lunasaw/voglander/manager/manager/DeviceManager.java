@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -16,7 +17,9 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.luna.common.check.Assert;
 
 import io.github.lunasaw.voglander.common.anno.TechnicalScheduler;
+import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.PlacementScope;
 import io.github.lunasaw.voglander.common.constant.device.DeviceConstant;
+import io.github.lunasaw.voglander.common.event.LocalCascadePlacementChangeEvent;
 import io.github.lunasaw.voglander.common.exception.ServiceException;
 import io.github.lunasaw.voglander.common.exception.ServiceExceptionEnum;
 import io.github.lunasaw.voglander.manager.assembler.DeviceAssembler;
@@ -89,6 +92,13 @@ public class DeviceManager {
 
     @Autowired(required = false)
     private io.github.lunasaw.voglander.manager.routing.DeviceNodeRouteService deviceNodeRouteService;
+
+    /**
+     * 归属变更广播：上级目录不会因为「节点这次没出现在快照里」就删掉它，
+     * 所以改组织以后必须显式通知一次旧位置。
+     */
+    @Autowired
+    private ApplicationEventPublisher eventPublisher;
 
     private DelayedCacheEviction delayedEviction;
 
@@ -222,6 +232,9 @@ public class DeviceManager {
             }
 
             clearCache(updateDO.getId(), oldDeviceId, updateDO.getDeviceId());
+            /* 归属变了要告知上级换位置：快照是增量 upsert，旧组织下那份不会自己消失 */
+            publishPlacementChange(existingRecord.getDeviceId(), existingRecord.getOrgId(),
+                resolveOrgIdOf(updateDTO.getOrgId(), existingRecord.getOrgId()));
             return updateDO.getId();
         } catch (ServiceException e) {
             throw e;
@@ -277,6 +290,9 @@ public class DeviceManager {
             }
 
             clearCache(id, oldDeviceId, updateDO.getDeviceId());
+            /* 归属变了要告知上级换位置：快照是增量 upsert，旧组织下那份不会自己消失 */
+            publishPlacementChange(existingRecord.getDeviceId(), existingRecord.getOrgId(),
+                resolveOrgIdOf(updateDTO.getOrgId(), existingRecord.getOrgId()));
             return id;
         } catch (ServiceException e) {
             throw e;
@@ -718,6 +734,31 @@ public class DeviceManager {
      */
     private static Long normalizeOrgId(Long orgId) {
         return orgId != null && orgId == 0L ? null : orgId;
+    }
+
+    /**
+     * 更新后的组织归属：入参为空表示「本次不改」，其余按落库口径归一。
+     *
+     * <p>必须与 {@code clearOrgId} 分支同口径：{@code updateById} 跳过 null 列，
+     * 清空是单独一条 {@code SET org_id = NULL}，所以 {@code 0} 要翻成 {@code null}。
+     */
+    private static Long resolveOrgIdOf(Long requested, Long previous) {
+        return requested == null ? previous : normalizeOrgId(requested);
+    }
+
+    /**
+     * 归属真的变了才广播。
+     *
+     * <p>{@code update} / {@code updateById} 是心跳、入站响应回填等高频路径的公共出口，
+     * 没改组织时连一个事件对象都不该造——监听器虽然会立刻返回，但调用量级不同。
+     */
+    private void publishPlacementChange(String deviceId, Long previousOrgId, Long currentOrgId) {
+        if (eventPublisher == null || deviceId == null || deviceId.isEmpty()
+            || Objects.equals(previousOrgId, currentOrgId)) {
+            return;
+        }
+        eventPublisher.publishEvent(new LocalCascadePlacementChangeEvent(PlacementScope.DEVICE,
+            deviceId, previousOrgId, currentOrgId));
     }
 
     /**

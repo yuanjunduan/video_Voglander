@@ -1,7 +1,6 @@
 package io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +18,7 @@ import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDev
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgView;
 import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
+import io.github.lunasaw.voglander.manager.manager.CascadePlacementIndex;
 import io.github.lunasaw.voglander.manager.manager.CascadePlatformManager;
 import io.github.lunasaw.voglander.manager.manager.CascadePublishedAssetResolver;
 import io.github.lunasaw.voglander.manager.manager.DeviceChannelManager;
@@ -76,7 +76,7 @@ public class CascadeCatalogAssembler {
         /* 组织只取「该平台目录里真能立起来」的那些：祖先链没发布齐全的节点即使自己在发布集里，
            上级也会因为 ParentID 指向不存在的节点而丢弃它，不如这里就剔除 */
         CascadePlatformOrgView orgView = cascadeOrgManager.platformOrgView(platformId);
-        CatalogParentIndex parentIndex = new CatalogParentIndex(domainId, orgView);
+        CascadePlacementIndex parentIndex = CascadePlacementIndex.of(domainId, orgView);
         for (CascadePlatformOrgDTO org : orgView.catalogOrgs()) {
             if (StringUtils.isBlank(org.getPlatformCode())) {
                 continue;
@@ -141,7 +141,7 @@ public class CascadeCatalogAssembler {
      * 会以为发布没生效；通道上下线只影响 {@code Status} 字段。
      */
     private void addDeviceNodes(CascadePlatformDTO platform, String platformId, String domainId,
-        CatalogParentIndex parentIndex, List<CascadeCatalogNode> nodes) {
+        CascadePlacementIndex parentIndex, List<CascadeCatalogNode> nodes) {
         if (platform == null || !platform.useDeviceLayer()) {
             return;
         }
@@ -307,119 +307,6 @@ public class CascadeCatalogAssembler {
     private CascadeCatalogNode domainNode(String domainId) {
         return new CascadeCatalogNode(domainId, PLATFORM_NAME, null, domainId, PLATFORM_NAME,
             "CascadePlatform", CIVIL_CODE, domainId, null, null, "ON", CascadeCatalogNode.Kind.DOMAIN);
-    }
-
-    /**
-     * 某平台目录的父节点索引：本地标识 → 上级眼里的编码。
-     *
-     * <p>把两种父节点来源（组织、设备）汇总成一处查询，是为了让「挂哪个节点」
-     * 只在一个地方回答。散布在组装流程里的多段 if 很容易出现「通道挂到组织、事件却报到设备」这种错位。
-     */
-    private static final class CatalogParentIndex {
-
-        private final String                   domainId;
-        private final Set<String>              reroutedLocalCodes;
-        /** 本地组织编码 → 平台组织编码 */
-        private final Map<String, String>      orgCodeByLocal = new HashMap<>();
-        /** 设备国标 ID → 平台设备编码（只在设备层开启时有内容） */
-        private final Map<String, String>      deviceCodeByLocal = new HashMap<>();
-        private       int                      orgCount;
-        private       int                      deviceCount;
-
-        private CatalogParentIndex(String domainId, CascadePlatformOrgView orgView) {
-            this.domainId = domainId;
-            this.reroutedLocalCodes = orgView == null ? Set.of() : orgView.reroutedLocalCodes();
-        }
-
-        private void addOrg(CascadePlatformOrgDTO org) {
-            orgCodeByLocal.put(org.getLocalCode(), org.getPlatformCode());
-            orgCount++;
-        }
-
-        /** 设备节点入索引：它将作为其下通道的父节点候选。 */
-        private void addDevice(CascadePlatformDeviceDTO device) {
-            deviceCodeByLocal.put(device.getLocalDeviceId(), device.getPlatformCode());
-            deviceCount++;
-        }
-
-        /** 设备挂在哪个节点下：只能是它归属的组织；组织不可见则设备也不出现。 */
-        private String resolveDeviceParent(CascadePlatformDeviceDTO device) {
-            String orgCode = device.getLocalOrgCode();
-            if (orgCode == null) {
-                return domainId;
-            }
-            String parent = orgCodeByLocal.get(orgCode);
-            if (parent == null) {
-                log.debug("设备归属组织不在该平台目录内，设备节点不出现: deviceId={}, orgCode={}",
-                    device.getLocalDeviceId(), orgCode);
-            }
-            return parent;
-        }
-
-        /**
-         * 通道挂到哪个节点下（四级解析，前一级不可用才看下一级）。
-         *
-         * <ol>
-         *   <li>通道<b>自己</b>归属的组织可见 → 组织节点</li>
-         *   <li>设备已发布且设备层开启 → 设备节点</li>
-         *   <li>设备归属的组织可见 → 组织节点（无设备层时的常规归宿）</li>
-         *   <li>都不行：归属组织配了 {@code REROUTE} → 域节点；无归属 → 域节点；否则丢弃</li>
-         * </ol>
-         *
-         * <p>第 1 级一旦命中就不再看设备层：通道显式直挂组织是业务分组意图，
-         * 开了设备层不能把它悄悄挪到设备下面。组织不可见时也不回落到设备，
-         * 而是按该组织的策略处理——否则用户停用一个组织，其下通道会从那个组织“搬家”到设备层。
-         *
-         * <p><b>没有「发布行指定父节点」这一级</b>：那个覆盖曾允许同一通道在不同上级挂不同父节点，
-         * 实际用起来必然出现「改了本地组织、上级目录不动」的错位（快照是增量 upsert，旧位置不会自己消失），
-         * 且改挂后没有任何报文能让上级重建父子关系。目录结构现在只有本地归属一个真相。
-         *
-         * @return 父节点编码；返回 null 表示该通道不上报
-         */
-        private String resolveChannelParent(CascadeChannelDTO channel) {
-            String ownOrg = StringUtils.trimToNull(channel.getCascadeOrgId());
-            if (ownOrg != null) {
-                return visibleOrPolicy(ownOrg, channel.getCascadeChannelId());
-            }
-            String deviceCode = deviceCodeByLocal.get(channel.getLocalDeviceId());
-            if (deviceCode != null) {
-                return deviceCode;
-            }
-            String deviceOrg = StringUtils.trimToNull(channel.getDeviceOrgCode());
-            if (deviceOrg != null) {
-                return visibleOrPolicy(deviceOrg, channel.getCascadeChannelId());
-            }
-            /* 既无自身归属也无设备归属：挂域节点是允许的（早期行为已如此，上级能看到通道） */
-            return domainId;
-        }
-
-        /**
-         * 组织可见就用它，不可见就看该组织的 {@code revoke_policy}。
-         *
-         * @return 组织编码；{@code REROUTE} 返回域编码；{@code CASCADE} 或未配置返回 null（不上报）
-         */
-        private String visibleOrPolicy(String orgCode, String cascadeChannelId) {
-            String code = orgCodeByLocal.get(orgCode);
-            if (code != null) {
-                return code;
-            }
-            if (reroutedLocalCodes.contains(orgCode)) {
-                log.debug("组织不在该平台目录内且策略为 REROUTE，通道上浮挂域节点: cascadeChannelId={}, orgCode={}",
-                    cascadeChannelId, orgCode);
-                return domainId;
-            }
-            log.debug("组织不在该平台目录内且策略为 CASCADE，通道不再上报: cascadeChannelId={}, orgCode={}",
-                cascadeChannelId, orgCode);
-            return null;
-        }
-
-        private int orgCount() {
-            return orgCount;
-        }
-
-        private int deviceCount() {
-            return deviceCount;
-        }
     }
 
     /** 一次查出本次涉及设备下所有通道的状态，避免逐通道回表。 */

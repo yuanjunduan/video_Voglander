@@ -164,6 +164,21 @@ public interface CascadeConstant {
         }
     }
 
+    /**
+     * 归属变更的范围标记（{@code LocalCascadePlacementChangeEvent} 的 {@code scope}）。
+     *
+     * <p>与 {@link PublishObjectType} 同值但语义不同：那边是发布行的对象类型，这边是「变了什么」。
+     * 两者今天恰好一一对应，但以后若出现只动通道不动设备的规则，这个值不会跟着被动。
+     */
+    interface PlacementScope {
+
+        /** 设备（含其下跟随设备的通道） */
+        String DEVICE  = "DEVICE";
+
+        /** 单条通道 */
+        String CHANNEL = "CHANNEL";
+    }
+
     /** 录像查询请求状态（对齐 tb_cascade_record_request.status） */
     interface RecordReqStatus {
         int PENDING   = 0;
