@@ -156,6 +156,7 @@ public class DeviceChannelWebAssembler {
         dto.setName(queryReq.getName());
         dto.setStatus(queryReq.getStatus());
         dto.setOrgId(queryReq.getOrgId());
+        dto.setIncludeChildren(queryReq.getIncludeChildren());
         dto.setEnabled(queryReq.getEnabled());
 
         return dto;

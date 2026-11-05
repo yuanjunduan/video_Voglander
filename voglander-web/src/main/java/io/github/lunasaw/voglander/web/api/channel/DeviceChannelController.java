@@ -248,13 +248,15 @@ public class DeviceChannelController {
     }
 
     /**
-     * 批量回填组织归属：通道没有自己的组织，{@code orgId}/{@code orgName} 都按<b>设备</b>的组织算。
+     * 批量回填组织归属与设备名：通道没有自己的组织，{@code orgId}/{@code orgName} 都按<b>设备</b>的组织算。
      *
-     * <p>两件事必须同时做，缺一件就会出现“页面说归 A、目录却挂在设备下”的静默不一致：
+     * <p>三件事必须同时做，缺一件就会出现“页面说归 A、目录却挂在设备下”的静默不一致：
      * <ol>
      *   <li>{@code orgId} 必须被设备组织<b>覆盖</b>（设备无组织就写 null）——通道行上停写后
      *       还残留着旧值，不覆盖就会把已失效的归属当成当前状态展示；</li>
-     *   <li>名称用一次组织索引批量补齐，不能逐行查库。</li>
+     *   <li>名称用一次组织索引批量补齐，不能逐行查库；</li>
+     *   <li>{@code deviceName} 同样批量补齐：按组织浏览时一张表混着多台设备的通道，
+     *       只有通道名根本分不清归属。</li>
      * </ol>
      */
     private void fillDeviceOrg(List<DeviceChannelVO> items) {
@@ -270,11 +272,13 @@ public class DeviceChannelController {
             return;
         }
         Map<String, Long> orgIdByDeviceId = deviceManager.mapOrgIdByDeviceIds(deviceIds);
+        Map<String, String> deviceNameByDeviceId = deviceManager.mapNameByDeviceIds(deviceIds);
         Map<Long, String> nameById = cascadeOrgManager.nameIndexById();
         for (DeviceChannelVO vo : items) {
             Long orgId = orgIdByDeviceId.get(vo.getDeviceId());
             vo.setOrgId(orgId);
             vo.setOrgName(orgId == null ? null : nameById.get(orgId));
+            vo.setDeviceName(deviceNameByDeviceId.get(vo.getDeviceId()));
         }
     }
 }

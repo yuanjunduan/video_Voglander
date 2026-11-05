@@ -187,6 +187,7 @@ public class DeviceWebAssembler {
         dto.setRegisterTimeEnd(toLocalDateTime(req.getRegisterTimeEnd()));
         dto.setEnabled(req.getEnabled());
         dto.setOrgId(req.getOrgId());
+        dto.setIncludeChildren(req.getIncludeChildren());
         return dto;
     }
 

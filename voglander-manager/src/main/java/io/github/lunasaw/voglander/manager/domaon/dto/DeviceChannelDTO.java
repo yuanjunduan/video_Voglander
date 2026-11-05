@@ -54,6 +54,14 @@ public class DeviceChannelDTO {
     private Long   orgId;
 
     /**
+     * 按组织筛选时是否包含下级组织（默认否）。
+     *
+     * <p><b>非持久化字段</b>：只参与查询条件。通道行上的 {@code org_id} 已停写，
+     * 真正的过滤口径是「所属设备落在这些组织里」。
+     */
+    private Boolean includeChildren;
+
+    /**
      * 本地启用 1/0，{@code null} = 不改。与在线状态 {@code status} 无关：
      * {@code status} 只影响报文里的 Status，{@code enabled=0} 才让通道从所有上级平台消失。
      */

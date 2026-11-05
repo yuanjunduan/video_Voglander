@@ -67,6 +67,14 @@ public class DeviceChannelVO implements Serializable {
     private String            orgName;
 
     /**
+     * 所属设备名称（Controller 按 {@code deviceId} 批量回填）。
+     *
+     * <p>跨设备的通道列表（按组织浏览）没有设备列就分不清哪条通道属于哪台机，
+     * 设备名为空时回落国标 ID。
+     */
+    private String            deviceName;
+
+    /**
      * 本地启用 1启用 / 0停用，与在线状态 {@code status} 无关
      */
     private Integer           enabled;

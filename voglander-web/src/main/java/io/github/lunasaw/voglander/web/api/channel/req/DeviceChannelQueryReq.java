@@ -47,6 +47,14 @@ public class DeviceChannelQueryReq implements Serializable {
 
     /**
      * 所属级联组织 {@code tb_cascade_org.id}；{@code 0} 表示"未归组织"
+     *
+     * <p>口径按<b>所属设备</b>的组织算：通道行上的 org_id 已停写（恒 NULL），
+     * 直接拿它过滤会什么都查不到。
      */
     private Long              orgId;
+
+    /**
+     * 按组织筛选时是否包含下级组织（默认否）
+     */
+    private Boolean           includeChildren;
 }

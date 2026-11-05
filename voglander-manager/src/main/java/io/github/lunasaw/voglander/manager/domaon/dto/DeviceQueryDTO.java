@@ -62,6 +62,14 @@ public class DeviceQueryDTO implements Serializable {
     private Long              orgId;
 
     /**
+     * 按组织筛选时是否包含下级组织（默认否）。
+     *
+     * <p>设备挂在叶子组织上，只按 {@code orgId} 精确匹配时选中上级组织会一台都看不到；
+     * 开启后沿 {@code tb_cascade_org.org_path} 前缀匹配把整棵子树展开。
+     */
+    private Boolean           includeChildren;
+
+    /**
      * 设备 IP（模糊匹配）
      */
     private String            ip;

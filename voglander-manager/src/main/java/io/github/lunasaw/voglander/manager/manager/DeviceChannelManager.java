@@ -802,7 +802,7 @@ public class DeviceChannelManager {
                 .eq(queryDO.getEnabled() != null, DeviceChannelDO::getEnabled, queryDO.getEnabled())
                 .like(queryDO.getName() != null, DeviceChannelDO::getName, queryDO.getName());
 
-            appendOrgIdCondition(queryWrapper, queryDO.getOrgId());
+            appendOrgIdCondition(queryWrapper, queryDO.getOrgId(), false);
             queryWrapper.last("limit 1");
 
             DeviceChannelDO existingRecord = deviceChannelService.getOne(queryWrapper);
@@ -870,7 +870,7 @@ public class DeviceChannelManager {
                 .eq(deviceChannelDO.getEnabled() != null, DeviceChannelDO::getEnabled, deviceChannelDO.getEnabled())
                 .like(deviceChannelDO.getName() != null, DeviceChannelDO::getName, deviceChannelDO.getName());
 
-            appendOrgIdCondition(queryWrapper, deviceChannelDO.getOrgId());
+            appendOrgIdCondition(queryWrapper, deviceChannelDO.getOrgId(), false);
             queryWrapper.last("limit 1");
 
             DeviceChannelDO existingRecord = deviceChannelService.getOne(queryWrapper);
@@ -1020,7 +1020,7 @@ public class DeviceChannelManager {
                 .orderByDesc(DeviceChannelDO::getStatus)
                 .orderByDesc(DeviceChannelDO::getCreateTime);
 
-            appendOrgIdCondition(queryWrapper, deviceChannelDO.getOrgId());
+            appendOrgIdCondition(queryWrapper, deviceChannelDO.getOrgId(), deviceChannelDTO.getIncludeChildren());
 
             Page<DeviceChannelDO> pageQuery = new Page<>(page, size);
             Page<DeviceChannelDO> doPage = deviceChannelService.page(pageQuery, queryWrapper);
@@ -1047,19 +1047,27 @@ public class DeviceChannelManager {
     // ================================
 
     /**
-     * 组织归属筛选：{@code 0} 表示"未归组织"，按 IS NULL 查；其余按 id 精确匹配。
+     * 组织归属筛选：口径落在<b>所属设备</b>上，不是通道行。
+     *
+     * <p>通道行上的 {@code org_id} 在「通道跟随设备」改造后已停写，常年 NULL；
+     * 若继续按它过滤，选任何组织都查不到通道——页面上看到的组织名其实是
+     * {@code DeviceChannelController#fillDeviceOrg} 按设备实时推出来的。
+     *
+     * <p>{@code 0} 表示"未归组织"，落成「所属设备没有组织」。
      *
      * <p>{@code null} 表示本次不按组织筛（不限）。
      */
-    private static void appendOrgIdCondition(LambdaQueryWrapper<DeviceChannelDO> wrapper, Long orgId) {
+    private void appendOrgIdCondition(LambdaQueryWrapper<DeviceChannelDO> wrapper, Long orgId, Boolean includeChildren) {
         if (orgId == null) {
             return;
         }
-        if (orgId == 0L) {
-            wrapper.isNull(DeviceChannelDO::getOrgId);
-        } else {
-            wrapper.eq(DeviceChannelDO::getOrgId, orgId);
+        List<String> deviceIds = deviceManager.listDeviceIdsByOrgScope(orgId, Boolean.TRUE.equals(includeChildren));
+        if (deviceIds.isEmpty()) {
+            /* 该组织（含子树）下没有设备，也就没有通道；不能退化成不限 */
+            wrapper.apply("1 = 0");
+            return;
         }
+        wrapper.in(DeviceChannelDO::getDeviceId, deviceIds);
     }
 
     /**

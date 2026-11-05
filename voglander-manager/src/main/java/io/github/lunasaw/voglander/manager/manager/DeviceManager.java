@@ -1,10 +1,12 @@
 package io.github.lunasaw.voglander.manager.manager;
 
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -100,6 +102,16 @@ public class DeviceManager {
     @Autowired
     private ApplicationEventPublisher eventPublisher;
 
+    /**
+     * 组织树，仅用于把「选了上级组织」翻译成整棵子树的主键集合。
+     *
+     * <p>与 {@code CascadeOrgManager → DeviceManager} 是一对反向依赖（组织删除时要校验设备占用），
+     * 必须 {@link Lazy} 断开，否则两个单例在启动时互相等待而无法完成注入。
+     */
+    @Autowired
+    @Lazy
+    private CascadeOrgManager cascadeOrgManager;
+
     private DelayedCacheEviction delayedEviction;
 
     /**
@@ -192,7 +204,9 @@ public class DeviceManager {
                 .eq(queryDTO.getType() != null, DeviceDO::getType, queryDTO.getType())
                 .eq(queryDTO.getEnabled() != null, DeviceDO::getEnabled, queryDTO.getEnabled());
 
-            appendOrgIdCondition(queryWrapper, queryDTO.getOrgId());
+            /* 这里是「按业务键取唯一一条」的入口（带 limit 1），组织只作辅助区分：
+               展开子树会让同名的另一台设备被误当成目标行，所以不收 includeChildren */
+            appendOrgIdCondition(queryWrapper, queryDTO.getOrgId(), false);
             queryWrapper.last("limit 1");
 
             DeviceDO existingRecord = deviceService.getOne(queryWrapper);
@@ -324,7 +338,7 @@ public class DeviceManager {
                 .eq(deviceDTO.getType() != null, DeviceDO::getType, deviceDTO.getType())
                 .eq(deviceDTO.getEnabled() != null, DeviceDO::getEnabled, deviceDTO.getEnabled());
 
-            appendOrgIdCondition(queryWrapper, deviceDTO.getOrgId());
+            appendOrgIdCondition(queryWrapper, deviceDTO.getOrgId(), false);
             queryWrapper.last("limit 1");
 
             DeviceDO existingRecord = deviceService.getOne(queryWrapper);
@@ -455,7 +469,7 @@ public class DeviceManager {
                     .eq(deviceDTO.getServerIp() != null, DeviceDO::getServerIp, deviceDTO.getServerIp())
                     .eq(deviceDTO.getType() != null, DeviceDO::getType, deviceDTO.getType())
                     .eq(deviceDTO.getEnabled() != null, DeviceDO::getEnabled, deviceDTO.getEnabled());
-                appendOrgIdCondition(queryWrapper, deviceDTO.getOrgId());
+                appendOrgIdCondition(queryWrapper, deviceDTO.getOrgId(), false);
             }
 
             queryWrapper.orderByDesc(DeviceDO::getCreateTime);
@@ -520,7 +534,7 @@ public class DeviceManager {
                     .ge(query.getRegisterTimeStart() != null, DeviceDO::getRegisterTime, query.getRegisterTimeStart())
                     .le(query.getRegisterTimeEnd() != null, DeviceDO::getRegisterTime, query.getRegisterTimeEnd())
                     .eq(query.getEnabled() != null, DeviceDO::getEnabled, query.getEnabled());
-                appendOrgIdCondition(queryWrapper, query.getOrgId());
+                appendOrgIdCondition(queryWrapper, query.getOrgId(), query.getIncludeChildren());
             }
 
             queryWrapper.orderByDesc(DeviceDO::getCreateTime);
@@ -742,19 +756,104 @@ public class DeviceManager {
     }
 
     /**
-     * 组织归属筛选：{@code 0} 表示"未归组织"，按 IS NULL 查；其余按 id 精确匹配。
+     * 组织归属筛选：{@code 0} 表示"未归组织"，按 IS NULL 查；其余按 id 匹配。
      *
      * <p>{@code null} 表示本次不按组织筛（不限）。
+     *
+     * <p>{@code includeChildren} 为 {@code true} 时沿组织物化路径展开整棵子树：设备总是挂在叶子组织上，
+     * 只做精确匹配的话，选一个上级组织会一台都看不到（这是筛选“没生效”最常见的误判来源）。
      */
-    private static void appendOrgIdCondition(LambdaQueryWrapper<DeviceDO> wrapper, Long orgId) {
+    private void appendOrgIdCondition(LambdaQueryWrapper<DeviceDO> wrapper, Long orgId, Boolean includeChildren) {
         if (orgId == null) {
             return;
         }
         if (orgId == 0L) {
             wrapper.isNull(DeviceDO::getOrgId);
-        } else {
-            wrapper.eq(DeviceDO::getOrgId, orgId);
+            return;
         }
+        if (!Boolean.TRUE.equals(includeChildren)) {
+            wrapper.eq(DeviceDO::getOrgId, orgId);
+            return;
+        }
+        List<Long> scope = resolveOrgScope(orgId, true);
+        if (scope.isEmpty()) {
+            /* 组织已不存在：查不到才是对的，不能退化成“不限”把全部设备倒出来 */
+            wrapper.apply("1 = 0");
+            return;
+        }
+        wrapper.in(DeviceDO::getOrgId, scope);
+    }
+
+    /**
+     * 组织主键 → 查询用的组织主键集合（含自身，可选择是否含子树）。
+     *
+     * <p>通道没有自己的组织，按组织筛通道时也要先落成一组组织主键再换算成设备，故单独暴露。
+     *
+     * @param orgId           组织主键；{@code null} 或 {@code 0}（未归组织）返回空集合
+     * @param includeChildren 是否包含下级组织
+     */
+    public List<Long> resolveOrgScope(Long orgId, boolean includeChildren) {
+        if (orgId == null || orgId == 0L) {
+            return Collections.emptyList();
+        }
+        if (!includeChildren || cascadeOrgManager == null) {
+            return Collections.singletonList(orgId);
+        }
+        return cascadeOrgManager.listSubtreeIds(orgId, true);
+    }
+
+    /**
+     * 列出一组组织范围内的设备国标 ID。
+     *
+     * <p>通道的组织归属完全来自所属设备（通道行上的 {@code org_id} 已停写、恒 NULL），
+     * 所以「按组织筛通道」只能先算出设备集合。
+     *
+     * @param orgId           组织主键；{@code 0} 表示未归组织（设备 org_id 为 NULL）
+     * @param includeChildren 是否包含下级组织
+     * @return 设备国标 ID 列表；组织不存在或无设备时为空
+     */
+    public List<String> listDeviceIdsByOrgScope(Long orgId, boolean includeChildren) {
+        if (orgId == null) {
+            return Collections.emptyList();
+        }
+        LambdaQueryWrapper<DeviceDO> qw = new LambdaQueryWrapper<>();
+        if (orgId == 0L) {
+            qw.isNull(DeviceDO::getOrgId);
+        } else {
+            List<Long> scope = resolveOrgScope(orgId, includeChildren);
+            if (scope.isEmpty()) {
+                return Collections.emptyList();
+            }
+            qw.in(DeviceDO::getOrgId, scope);
+        }
+        qw.select(DeviceDO::getDeviceId);
+        return deviceService.list(qw).stream()
+            .map(DeviceDO::getDeviceId)
+            .filter(StringUtils::isNotBlank)
+            .collect(Collectors.toList());
+    }
+
+    /**
+     * 设备国标 ID → 设备名索引（通道列表回填「所属设备」列用，一次查全避免 N+1）。
+     *
+     * @param deviceIds 设备国标 ID 集合
+     * @return 设备名索引；设备名为空时回落国标 ID
+     */
+    public Map<String, String> mapNameByDeviceIds(Collection<String> deviceIds) {
+        Map<String, String> nameByDeviceId = new HashMap<>();
+        if (deviceIds == null || deviceIds.isEmpty()) {
+            return nameByDeviceId;
+        }
+        LambdaQueryWrapper<DeviceDO> qw = new LambdaQueryWrapper<>();
+        qw.in(DeviceDO::getDeviceId, deviceIds)
+            .select(DeviceDO::getDeviceId, DeviceDO::getName);
+        for (DeviceDO device : deviceService.list(qw)) {
+            if (device.getDeviceId() != null) {
+                nameByDeviceId.put(device.getDeviceId(),
+                    StringUtils.defaultIfBlank(device.getName(), device.getDeviceId()));
+            }
+        }
+        return nameByDeviceId;
     }
 
     /**

@@ -659,6 +659,36 @@ public class CascadeOrgManager {
             .collect(java.util.stream.Collectors.toList());
     }
 
+    /**
+     * 按组织主键取子树内全部组织的<b>主键</b>（设备/通道的 {@code org_id} 过滤用）。
+     *
+     * <p>与 {@link #listSubtreeCodes} 同一套前缀匹配，只是把结果换成主键：<br>
+     * 设备表存的是 {@code org_id}，存编码的是发布关系，两者不能混用。
+     *
+     * <p>组织不存在时返回空列表（查不到是正确结果）；组织存在但路径未回填时，
+     * 前缀匹配不到任何节点，此时退化为「只有它自己」，避免用户看到「选了组织却一台设备都没有」。
+     *
+     * @param orgId       组织主键
+     * @param includeSelf 是否包含组织自身
+     */
+    public List<Long> listSubtreeIds(Long orgId, boolean includeSelf) {
+        if (orgId == null) {
+            return new ArrayList<>();
+        }
+        CascadeOrgDTO root = getById(orgId);
+        if (root == null) {
+            return new ArrayList<>();
+        }
+        List<Long> ids = listSubtree(root.getOrgCode(), includeSelf).stream()
+            .map(CascadeOrgDTO::getId)
+            .filter(Objects::nonNull)
+            .collect(java.util.stream.Collectors.toList());
+        if (includeSelf && !ids.contains(orgId)) {
+            ids.add(orgId);
+        }
+        return ids;
+    }
+
     /** 树形出参：children 挂在父节点上，并带直属通道数与已发布平台。 */
     public List<CascadeOrgDTO> tree() {
         return buildTree(listAll());
