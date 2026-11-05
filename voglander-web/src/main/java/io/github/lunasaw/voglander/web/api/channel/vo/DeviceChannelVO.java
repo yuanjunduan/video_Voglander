@@ -53,12 +53,16 @@ public class DeviceChannelVO implements Serializable {
     private String name;
 
     /**
-     * 所属级联组织 {@code tb_cascade_org.id}，空 = 跟随设备归属
+     * 设备所属级联组织 {@code tb_cascade_org.id}，空 = 设备也未归组织。
+     *
+     * <p><b>不是通道行上的 {@code org_id}</b>：通道是设备的子资源，位置只由设备决定。
+     * 该列已停写、发布侧也不再读，因此 Controller 回填时按 {@code deviceId} 取设备的组织；
+     * 库里残留的旧值一律忽略。
      */
     private Long              orgId;
 
     /**
-     * 所属级联组织名称（Controller 批量回填）
+     * 所属级联组织名称（Controller 按设备组织批量回填，设备未归组织时为空）
      */
     private String            orgName;
 
@@ -104,7 +108,7 @@ public class DeviceChannelVO implements Serializable {
         vo.setChannelId(dto.getChannelId());
         vo.setDeviceId(dto.getDeviceId());
         vo.setName(dto.getName());
-        vo.setOrgId(dto.getOrgId());
+        /* orgId 不在这里取：通道行上的 org_id 已停写，归属只能从设备侧回填 */
         vo.setEnabled(dto.getEnabled());
         vo.setExtend(dto.getExtend());
 

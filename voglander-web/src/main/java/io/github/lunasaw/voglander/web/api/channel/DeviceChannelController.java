@@ -2,12 +2,14 @@ package io.github.lunasaw.voglander.web.api.channel;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import io.github.lunasaw.voglander.common.constant.ApiConstant;
 import io.github.lunasaw.voglander.manager.domaon.dto.DeviceChannelDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
 import io.github.lunasaw.voglander.manager.manager.DeviceChannelManager;
+import io.github.lunasaw.voglander.manager.manager.DeviceManager;
 import io.github.lunasaw.voglander.manager.service.DeviceChannelService;
 import io.github.lunasaw.voglander.repository.entity.DeviceChannelDO;
 import io.github.lunasaw.voglander.service.device.DeviceChannelDiscoveryService;
@@ -25,6 +27,7 @@ import org.springframework.web.bind.annotation.*;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import org.apache.commons.lang3.StringUtils;
 
 import io.github.lunasaw.voglander.common.domain.AjaxResult;
 
@@ -55,6 +58,9 @@ public class DeviceChannelController {
 
     @Autowired
     private CascadeOrgManager cascadeOrgManager;
+
+    @Autowired
+    private DeviceManager deviceManager;
 
     @Autowired
     private DeviceChannelWebAssembler deviceChannelWebAssembler;
@@ -91,7 +97,7 @@ public class DeviceChannelController {
             return AjaxResult.error("记录不存在");
         }
         DeviceChannelVO vo = deviceChannelWebAssembler.dtoToVo(result);
-        fillOrgName(java.util.Collections.singletonList(vo));
+        fillDeviceOrg(java.util.Collections.singletonList(vo));
         return AjaxResult.success(vo);
     }
 
@@ -132,7 +138,7 @@ public class DeviceChannelController {
         List<DeviceChannelVO> voList = pageResult.getRecords().stream()
             .map(deviceChannelWebAssembler::dtoToVo)
             .collect(Collectors.toList());
-        fillOrgName(voList);
+        fillDeviceOrg(voList);
 
         DeviceChannelListResp resp = new DeviceChannelListResp();
         resp.setTotal(pageResult.getTotal());
@@ -234,22 +240,38 @@ public class DeviceChannelController {
         @Parameter(description = "设备ID") @PathVariable(value = "deviceId") String deviceId) {
         List<DeviceChannelDTO> channels = deviceChannelDiscoveryService.listByDevice(deviceId);
         List<DeviceChannelVO> voList = deviceChannelWebAssembler.dtoListToVoList(channels);
-        fillOrgName(voList);
+        fillDeviceOrg(voList);
         return AjaxResult.success(voList);
     }
 
     /**
-     * 批量回填所属组织名称：列表只回传 orgId，名称用一次组织树索引补齐。
+     * 批量回填组织归属：通道没有自己的组织，{@code orgId}/{@code orgName} 都按<b>设备</b>的组织算。
+     *
+     * <p>两件事必须同时做，缺一件就会出现“页面说归 A、目录却挂在设备下”的静默不一致：
+     * <ol>
+     *   <li>{@code orgId} 必须被设备组织<b>覆盖</b>（设备无组织就写 null）——通道行上停写后
+     *       还残留着旧值，不覆盖就会把已失效的归属当成当前状态展示；</li>
+     *   <li>名称用一次组织索引批量补齐，不能逐行查库。</li>
+     * </ol>
      */
-    private void fillOrgName(List<DeviceChannelVO> items) {
+    private void fillDeviceOrg(List<DeviceChannelVO> items) {
         if (items == null || items.isEmpty()) {
             return;
         }
+        Set<String> deviceIds = items.stream()
+            .map(DeviceChannelVO::getDeviceId)
+            .filter(StringUtils::isNotBlank)
+            .collect(Collectors.toSet());
+        if (deviceIds.isEmpty()) {
+            /* 没有设备键就无从推导归属；VO 上的 orgId 本来也未被赋值 */
+            return;
+        }
+        Map<String, Long> orgIdByDeviceId = deviceManager.mapOrgIdByDeviceIds(deviceIds);
         Map<Long, String> nameById = cascadeOrgManager.nameIndexById();
         for (DeviceChannelVO vo : items) {
-            if (vo.getOrgId() != null) {
-                vo.setOrgName(nameById.get(vo.getOrgId()));
-            }
+            Long orgId = orgIdByDeviceId.get(vo.getDeviceId());
+            vo.setOrgId(orgId);
+            vo.setOrgName(orgId == null ? null : nameById.get(orgId));
         }
     }
 }

@@ -714,6 +714,34 @@ public class DeviceManager {
     }
 
     /**
+     * 按设备国标 ID 批量取「设备 → 组织主键」（列表回填通道归属用）。
+     *
+     * <p>通道没有自己的组织，页面上展示的归属只能从设备侧取；逐条 {@code getDtoByDeviceId}
+     * 会让一页 20 行变成 20 次查询。只 select 两列，不把整行设备拉出来。
+     *
+     * <p>没归组织的设备不会出现在返回的 map 里——取不到即「无归属」，与库里 NULL 同义。
+     *
+     * @param deviceIds 设备国标 ID 集合
+     * @return deviceId → 组织主键；入参为空返回空 map
+     */
+    public Map<String, Long> mapOrgIdByDeviceIds(Collection<String> deviceIds) {
+        if (deviceIds == null || deviceIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        LambdaQueryWrapper<DeviceDO> qw = new LambdaQueryWrapper<>();
+        qw.select(DeviceDO::getDeviceId, DeviceDO::getOrgId)
+            .in(DeviceDO::getDeviceId, deviceIds)
+            .isNotNull(DeviceDO::getOrgId);
+        Map<String, Long> orgIdByDeviceId = new HashMap<>();
+        for (DeviceDO device : deviceService.list(qw)) {
+            if (device.getDeviceId() != null && device.getOrgId() != null) {
+                orgIdByDeviceId.put(device.getDeviceId(), device.getOrgId());
+            }
+        }
+        return orgIdByDeviceId;
+    }
+
+    /**
      * 组织归属筛选：{@code 0} 表示"未归组织"，按 IS NULL 查；其余按 id 精确匹配。
      *
      * <p>{@code null} 表示本次不按组织筛（不限）。
