@@ -7,6 +7,7 @@ import jakarta.validation.Valid;
 
 import io.github.lunasaw.voglander.common.constant.ApiConstant;
 import io.github.lunasaw.voglander.common.constant.device.SubscriptionConstant;
+import io.github.lunasaw.voglander.common.enums.DeviceAgreementEnum;
 import io.github.lunasaw.voglander.intergration.wrapper.rtsp.RtspProbeClient;
 import io.github.lunasaw.voglander.manager.domaon.dto.DeviceDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.DeviceQueryDTO;
@@ -24,7 +25,10 @@ import io.github.lunasaw.voglander.web.api.device.req.RtspProbeReq;
 import io.github.lunasaw.voglander.web.api.device.resp.DeviceListResp;
 import io.github.lunasaw.voglander.web.api.device.vo.DeviceVO;
 import io.github.lunasaw.voglander.web.api.device.vo.RtspProbeVO;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.web.bind.annotation.*;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -36,6 +40,8 @@ import io.github.lunasaw.voglander.common.exception.ServiceException;
 import io.github.lunasaw.voglander.common.exception.ServiceExceptionEnum;
 import io.github.lunasaw.voglander.manager.service.DeviceService;
 import io.github.lunasaw.voglander.repository.entity.DeviceDO;
+import io.github.lunasaw.voglander.service.device.DeviceChannelDiscoveryService;
+import io.github.lunasaw.voglander.service.device.dto.ChannelSyncResultDTO;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -43,6 +49,7 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 设备管理
@@ -50,6 +57,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
  * @Author: chenzhangyue
  * @CreateTime: 2024-01-30 14:19:15
  */
+@Slf4j
 @RestController
 @RequestMapping(ApiConstant.API_INDEX_V1 + "/device")
 @Tag(name = "设备管理", description = "设备管理相关接口")
@@ -78,6 +86,21 @@ public class DeviceController {
 
     @Autowired
     private RtspProbeClient rtspProbeClient;
+
+    @Autowired
+    private DeviceChannelDiscoveryService deviceChannelDiscoveryService;
+
+    /**
+     * 新增设备后自动补通道用的执行器。
+     *
+     * <p>
+     * 复用通用业务线程池，不用 {@code sipNotifierExecutor}：通道发现要发 HTTP 管理面请求
+     * （默认 3s 超时），挂在 SIP 入站线程上会拖慢注册与心跳。
+     * </p>
+     */
+    @Autowired
+    @Qualifier("threadPoolTaskExecutor")
+    private TaskExecutor      channelDiscoveryExecutor;
 
     @PostMapping("/getPage")
     @Operation(summary = "分页条件查询", description = "全量分页条件搜索，前端灵活组装条件（deviceId/名称/状态/类型/IP/时间范围）")
@@ -253,7 +276,7 @@ public class DeviceController {
     }
 
     @PostMapping("/insert")
-    @Operation(summary = "创建设备", description = "添加新的设备")
+    @Operation(summary = "创建设备", description = "添加新的设备；ONVIF/RTSP 拉流设备会在落库后异步补一次通道发现")
     @ApiResponse(responseCode = "200", description = "创建成功")
     public AjaxResult insert(@RequestBody DeviceCreateReq createReq) {
         // 手填新增必须归属一个组织：推送时按该组织挂目录节点，没有组织就无处可挂。
@@ -262,8 +285,11 @@ public class DeviceController {
         // Req -> DTO (使用 Web 层转换器)
         DeviceDTO deviceDTO = deviceWebAssembler.toDeviceDTO(createReq);
 
-        // 通过 Manager 层处理业务逻辑
+        // 通过 Manager 层处理业务逻辑（事务边界在 DeviceManager#createDevice，返回即已提交）
         Long deviceId = deviceManager.createDevice(deviceDTO);
+
+        // 拉流类设备的通道不在平台侧生成，落库后异步从设备管理面读一次
+        triggerChannelDiscovery(deviceDTO);
 
         return AjaxResult.success(deviceId);
     }
@@ -281,6 +307,12 @@ public class DeviceController {
 
         // 通过 Manager 层处理批量业务逻辑
         int successCount = deviceManager.batchCreateDevice(deviceDTOList);
+
+        /* Manager 只回成功条数、不区分是哪几条失败，因此只在全部成功时逐条补通道；
+           部分成功的剩余条目走通道页的「同步通道」手动补 */
+        if (successCount == createReqList.size()) {
+            deviceDTOList.forEach(this::triggerChannelDiscovery);
+        }
 
         return AjaxResult.success("成功创建 " + successCount + " 个设备，共 " + createReqList.size() + " 个请求");
     }
@@ -328,6 +360,48 @@ public class DeviceController {
         description = "按 ID 列表批量级联删除（同一事务），返回实际删除的设备数")
     public AjaxResult deleteBatch(@RequestBody List<Long> ids) {
         return AjaxResult.success(deviceRemovalManager.removeByIds(ids));
+    }
+
+    /**
+     * 拉流类设备（ONVIF/RTSP）新增后异步补一次通道发现。
+     *
+     * <p>
+     * 这两类设备的通道不会随新增自动产生：平台侧不生成通道号，只能从设备管理面台账里读
+     * （海康 ISAPI / 大华 CGI），对应 {@link DeviceChannelDiscoveryService#sync}。国标设备的通道由
+     * Catalog 目录应答维护，不在此列——对它们发管理面请求只会制造误导性的失败提示。
+     * </p>
+     *
+     * <p>
+     * 发现是纯网络 IO，放异步线程执行，<b>失败只记日志、不改变新增结果</b>：网络/凭据/厂商不匹配都可能失败，
+     * 但设备本身已经建好了，用户仍可在设备通道页点「同步通道」重试。
+     * </p>
+     *
+     * @param device 刚落库的设备；为 null 或协议类型不属于拉流类时不做任何事
+     */
+    private void triggerChannelDiscovery(DeviceDTO device) {
+        if (device == null || StringUtils.isBlank(device.getDeviceId())) {
+            return;
+        }
+        DeviceAgreementEnum agreement = DeviceAgreementEnum.getByType(device.getType());
+        if (agreement != DeviceAgreementEnum.ONVIF_IPC && agreement != DeviceAgreementEnum.RTSP_IPC) {
+            return;
+        }
+        String deviceId = device.getDeviceId();
+        channelDiscoveryExecutor.execute(() -> {
+            try {
+                ChannelSyncResultDTO result = deviceChannelDiscoveryService.sync(deviceId);
+                if (result.isPersisted()) {
+                    log.info("[channel.discover] 新增设备自动同步完成 deviceId={} 通道数={} 在线={}", deviceId,
+                        result.getDiscovered(), result.getOnlineCount());
+                } else {
+                    log.warn("[channel.discover] 新增设备自动同步未落库 deviceId={} reason={}", deviceId,
+                        result.getFailureReason());
+                }
+            } catch (Exception e) {
+                // 设备刚被并发删除、协议不支持、线程池已关闭都在这里收口：新增结果不受影响
+                log.warn("[channel.discover] 新增设备自动同步异常 deviceId={} err={}", deviceId, e.getMessage());
+            }
+        });
     }
 
     /**
