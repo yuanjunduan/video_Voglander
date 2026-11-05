@@ -1,9 +1,13 @@
 package io.github.lunasaw.voglander.manager.manager;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -14,6 +18,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.util.Assert;
 
 import io.github.lunasaw.voglander.manager.assembler.CascadeAssembler;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeClientDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
 import io.github.lunasaw.voglander.manager.service.CascadePlatformService;
 import io.github.lunasaw.voglander.repository.entity.CascadePlatformDO;
@@ -29,11 +34,26 @@ public class CascadePlatformManager {
     @Autowired
     private CascadePlatformService cascadePlatformService;
 
+    /** 本端客户端：平台只存它的外键，编码与通告 IP 在读取时派生，因此改一次全局生效 */
+    @Autowired
+    private CascadeClientManager    cascadeClientManager;
+
+    /**
+     * 本端 SIP 监听端口，恒取自配置。
+     *
+     * <p>不从客户端表读：一个 UA 只绑一个 socket，端口是事实而不是选项。
+     * 这里读配置而不是注入 integration 层的 properties，是因为 manager 模块被 integration 依赖，
+     * 反向注入会形成循环依赖。
+     */
+    @Value("${sip.client.port:5061}")
+    private int                     localSipPort;
+
     public Long add(CascadePlatformDTO dto) {
         Assert.notNull(dto, "dto 不能为空");
         Assert.hasText(dto.getPlatformId(), "platformId 不能为空");
         Assert.hasText(dto.getPlatformIp(), "platformIp 不能为空");
-        Assert.hasText(dto.getLocalClientId(), "localClientId 不能为空");
+        Assert.notNull(dto.getClientRefId(), "clientRefId 不能为空，请在「本端客户端」中选择一个身份");
+        assertClientExists(dto.getClientRefId());
         assertCodeRuleValid(dto);
 
         CascadePlatformDO doObj = CascadeAssembler.toDO(dto);
@@ -55,14 +75,38 @@ public class CascadePlatformManager {
         if (platformId == null) return null;
         LambdaQueryWrapper<CascadePlatformDO> qw = new LambdaQueryWrapper<>();
         qw.eq(CascadePlatformDO::getPlatformId, platformId);
-        return CascadeAssembler.toDTO(cascadePlatformService.getOne(qw));
+        return enrich(CascadeAssembler.toDTO(cascadePlatformService.getOne(qw)));
     }
 
+    /**
+     * 按本端平台编码反查上级平台。
+     *
+     * <p>调用方是「收到一条以本端编码为 From/To 的报文，需要找到对应平台」的路径
+     * （注册监听、配置变更监听）。编码已抽取到客户端表，所以先按 {@code client_id} 取客户端，
+     * 再按 {@code client_ref_id} 反查平台。
+     *
+     * <p>同一客户端可以被多个上级共用，此时返回主键最小的那条并告警：调用方只能处理一个平台，
+     * 而静默取任意一条会让排查时看到与库里不一致的“随机”平台。
+     *
+     * @param localClientId 本端平台编码
+     * @return 对应的上级平台；编码不存在或没有任何平台引用时返回 null
+     */
     public CascadePlatformDTO getByLocalClientId(String localClientId) {
-        if (localClientId == null) return null;
+        CascadeClientDTO client = cascadeClientManager.getByClientId(localClientId);
+        if (client == null || client.getId() == null) {
+            return null;
+        }
         LambdaQueryWrapper<CascadePlatformDO> qw = new LambdaQueryWrapper<>();
-        qw.eq(CascadePlatformDO::getLocalClientId, localClientId);
-        return CascadeAssembler.toDTO(cascadePlatformService.getOne(qw));
+        qw.eq(CascadePlatformDO::getClientRefId, client.getId()).orderByAsc(CascadePlatformDO::getId);
+        List<CascadePlatformDO> rows = cascadePlatformService.list(qw);
+        if (rows.isEmpty()) {
+            return null;
+        }
+        if (rows.size() > 1) {
+            log.warn("本端编码被多个上级平台引用，按主键最小者处理: clientId={}, platformIds={}", localClientId,
+                rows.stream().map(CascadePlatformDO::getPlatformId).toList());
+        }
+        return enrich(CascadeAssembler.toDTO(rows.get(0)));
     }
 
     public boolean updateRegisterStatus(Long id, int status) {
@@ -83,11 +127,38 @@ public class CascadePlatformManager {
 
     public CascadePlatformDTO getById(Long id) {
         if (id == null) return null;
-        return CascadeAssembler.toDTO(cascadePlatformService.getById(id));
+        return enrich(CascadeAssembler.toDTO(cascadePlatformService.getById(id)));
+    }
+
+    /**
+     * 列出引用了指定本端客户端的平台。
+     *
+     * <p>客户端改了通告 IP 之后，注册调度持有的还是旧快照（里面拼好的 From 头），
+     * 必须按这个列表逐条重建；否则界面显示已改而实际上仍在用旧地址发注册。
+     *
+     * @param clientRefId 客户端主键
+     * @return 平台列表（含派生字段）；入参为空返回空列表
+     */
+    public List<CascadePlatformDTO> listByClientRefId(Long clientRefId) {
+        if (clientRefId == null) {
+            return List.of();
+        }
+        LambdaQueryWrapper<CascadePlatformDO> qw = new LambdaQueryWrapper<>();
+        qw.eq(CascadePlatformDO::getClientRefId, clientRefId).orderByAsc(CascadePlatformDO::getId);
+        List<CascadePlatformDTO> rows = cascadePlatformService.list(qw).stream().map(CascadeAssembler::toDTO)
+            .toList();
+        CascadeClientDTO client = cascadeClientManager.getById(clientRefId);
+        rows.forEach(dto -> fillDerived(dto, client));
+        return rows;
     }
 
     public boolean update(CascadePlatformDTO dto) {
         Assert.notNull(dto.getId(), "id 不能为空");
+        /* 换客户端等于换注册身份：先确认目标存在，否则库里会留下指向空行的引用，
+           注册时表现成「取不到本端编码」而不是「客户端被删了」 */
+        if (dto.getClientRefId() != null) {
+            assertClientExists(dto.getClientRefId());
+        }
         /* 通用更新是 patch 语义：只传了规则列才校验，且要按「库里现值 + 本次提交」合并后的值判——
            否则用户只改县编码，其余段在 DTO 里是 null，会被误报「前 14 位必填」 */
         if (touchesCodeRule(dto)) {
@@ -219,8 +290,49 @@ public class CascadePlatformManager {
         qw.orderByDesc(CascadePlatformDO::getCreateTime);
         Page<CascadePlatformDO> doPage = cascadePlatformService.page(new Page<>(page, size), qw);
         Page<CascadePlatformDTO> result = new Page<>(doPage.getCurrent(), doPage.getSize(), doPage.getTotal());
-        result.setRecords(doPage.getRecords().stream().map(CascadeAssembler::toDTO).toList());
+        List<CascadePlatformDTO> records = doPage.getRecords().stream().map(CascadeAssembler::toDTO).toList();
+        /* 派生字段一次批量取：逐行去查客户端会把 20 条/页的分页变成 21 条 SQL */
+        Set<Long> clientRefIds = records.stream().map(CascadePlatformDTO::getClientRefId)
+            .filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, CascadeClientDTO> clients = cascadeClientManager.mapByIds(clientRefIds);
+        records.forEach(dto -> fillDerived(dto, clients.get(dto.getClientRefId())));
+        result.setRecords(records);
         return result;
+    }
+
+    // ------------------------------------------------------------------ 本端身份派生
+
+    /**
+     * 把单条平台 DTO 的派生字段填好。
+     *
+     * <p>读路径全部经此收口：数据库里只存 {@code client_ref_id}，
+     * {@code localClientId / localIp / localPort} 只在出参上存在，
+     * 拼 From 头、日志、页面回显都拿到同一份值。
+     */
+    private CascadePlatformDTO enrich(CascadePlatformDTO dto) {
+        if (dto == null) {
+            return null;
+        }
+        fillDerived(dto, dto.getClientRefId() == null ? null : cascadeClientManager.getById(dto.getClientRefId()));
+        return dto;
+    }
+
+    /**
+     * 用客户端行填派生字段；客户端缺失时置空而不是报错。
+     *
+     * <p>置空的后果是可控的：{@code CascadeQueryHandler} 在 {@code localIp} 为空时
+     * 会拒绝应答上级 Query 并打出告警，把「客户端被删/引用悬空」直接暴露成一个可见现象。
+     * 而在这里抛异常会让整个平台列表都打不开，连修的数据都找不到。
+     */
+    private void fillDerived(CascadePlatformDTO dto, CascadeClientDTO client) {
+        dto.setLocalClientId(client == null ? null : client.getClientId());
+        dto.setLocalIp(client == null ? null : StringUtils.trimToNull(client.getClientIp()));
+        dto.setLocalPort(localSipPort);
+    }
+
+    /** 引用完整性：平台只能指向存在的客户端（外键由应用层兜底，不依赖数据库方言的 FK 支持）。 */
+    private void assertClientExists(Long clientRefId) {
+        Assert.notNull(cascadeClientManager.getById(clientRefId), "本端客户端不存在：" + clientRefId);
     }
 
     // ------------------------------------------------------------------ 编码规则内部

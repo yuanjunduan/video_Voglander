@@ -486,6 +486,30 @@ VALUES
 (60204, 602, 'CascadeChannelStatus', 'cascade.channel.status', 3, null, null, '', 4, 1, 'Cascade:Channel:Status',
  JSON_OBJECT('title', 'cascade.channel.status', 'hideInMenu', true));
 
+-- 插入级联本端客户端菜单（605）：本端向上级注册的身份（20 位平台编码 + Contact 头对外通告 IP）
+-- 排序在平台（601）之前：先有本端身份，上级平台才能引用它
+-- 取 605 而非 604：604 已被 1.0.13 的「级联运行状态」页占用
+INSERT INTO tb_menu (id, parent_id, menu_code, menu_name, menu_type, path, component, icon, sort_order, status,
+                     permission, meta)
+VALUES
+(605, 500, 'CascadeClient', 'cascade.client.title', 2, '/device/cascade/client', '/cascade/client/list',
+ 'mdi:account-network-outline', 2, 1, 'Cascade:Client:List',
+ '{"icon":"mdi:account-network-outline","title":"cascade.client.title","hideInMenu":false}'::json);
+
+-- 级联本端客户端列表（605）按钮权限：新增 / 编辑 / 删除 / 设为默认
+INSERT INTO tb_menu (id, parent_id, menu_code, menu_name, menu_type, path, component, icon, sort_order, status,
+                     permission, meta)
+VALUES
+(60501, 605, 'CascadeClientCreate', 'cascade.client.create', 3, null, null, '', 1, 1, 'Cascade:Client:Create',
+ JSON_OBJECT('title', 'cascade.client.create', 'hideInMenu', true)),
+(60502, 605, 'CascadeClientEdit', 'cascade.client.edit', 3, null, null, '', 2, 1, 'Cascade:Client:Edit',
+ JSON_OBJECT('title', 'cascade.client.edit', 'hideInMenu', true)),
+(60503, 605, 'CascadeClientDelete', 'cascade.client.delete', 3, null, null, '', 3, 1, 'Cascade:Client:Delete',
+ JSON_OBJECT('title', 'cascade.client.delete', 'hideInMenu', true)),
+(60504, 605, 'CascadeClientDefault', 'cascade.client.setDefault', 3, null, null, '', 4, 1,
+ 'Cascade:Client:SetDefault',
+ JSON_OBJECT('title', 'cascade.client.setDefault', 'hideInMenu', true));
+
 -- 插入Project子菜单
 INSERT INTO tb_menu (id, parent_id, menu_code, menu_name, menu_type, path, component, icon, sort_order, status,
                      permission, meta)
@@ -656,6 +680,34 @@ CREATE TABLE tb_device_position
 
 
 -- ----------------------------
+-- Table structure for tb_cascade_client  (级联本端客户端：本端平台身份)
+-- 只登记「我们是谁」：国标编码 + 对外通告 IP。端口不落库——一个客户端协议栈只监听
+-- 一个 socket（sip.client.port），存副本只会制造「表里 5062、实际听 5061」的隐性故障。
+-- ----------------------------
+DROP TABLE IF EXISTS tb_cascade_client;
+CREATE TABLE tb_cascade_client
+(
+    id          BIGSERIAL,
+    create_time TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    client_id   VARCHAR(64)  NOT NULL,
+    client_name VARCHAR(128) NOT NULL DEFAULT '',
+    client_ip   VARCHAR(64)  NOT NULL DEFAULT '',
+    is_default  SMALLINT     NOT NULL DEFAULT 0,
+    enabled     SMALLINT     NOT NULL DEFAULT 1,
+    remark      VARCHAR(255) DEFAULT NULL,
+    extend      TEXT,
+    PRIMARY KEY (id),
+    UNIQUE (client_id)
+);
+COMMENT ON COLUMN tb_cascade_client.client_id IS '本端平台编码(20位)，创建后不可改';
+COMMENT ON COLUMN tb_cascade_client.client_name IS '本地辨识名，空=未命名';
+COMMENT ON COLUMN tb_cascade_client.client_ip IS '对外通告IP(Contact/From用)，必须是上级可回包地址';
+COMMENT ON COLUMN tb_cascade_client.is_default IS '新增上级平台时默认预选 0否 1是(全局唯一)';
+CREATE INDEX idx_cascade_client_default ON tb_cascade_client (is_default);
+
+
+-- ----------------------------
 -- Table structure for tb_cascade_platform  (级联上级平台)
 -- ----------------------------
 DROP TABLE IF EXISTS tb_cascade_platform;
@@ -671,9 +723,7 @@ CREATE TABLE tb_cascade_platform
     platform_name      VARCHAR(128) NOT NULL DEFAULT '',
     username           VARCHAR(64) NOT NULL DEFAULT '',
     password           VARCHAR(128) NOT NULL DEFAULT '',
-    local_client_id    VARCHAR(64) NOT NULL,
-    local_ip           VARCHAR(64)          DEFAULT NULL,
-    local_port         INT                                                   NOT NULL DEFAULT 5061,
+    client_ref_id      BIGINT       DEFAULT NULL,
     enabled            SMALLINT                                               NOT NULL DEFAULT 1,
     register_status    SMALLINT                                               NOT NULL DEFAULT 0,
     keepalive_interval INT                                                   NOT NULL DEFAULT 60,
@@ -703,6 +753,8 @@ COMMENT ON COLUMN tb_cascade_platform.code_network IS '平台编码规则-网络
 COMMENT ON COLUMN tb_cascade_platform.code_start_seq IS '平台编码规则-起始序号(6位)';
 COMMENT ON COLUMN tb_cascade_platform.code_rule_enabled IS '平台编码规则 0=未启用(沿用本地组织码与全局兜底) 1=按平台七段规则生成';
 COMMENT ON COLUMN tb_cascade_platform.publish_ancestors IS '发布策略 0=勾选组织时缺祖先即报错 1=自动补推缺失的祖先链';
+COMMENT ON COLUMN tb_cascade_platform.client_ref_id IS '本端客户端(tb_cascade_client.id)，应用层必填';
+CREATE INDEX idx_cascade_platform_client ON tb_cascade_platform (client_ref_id);
 
 
 -- ----------------------------

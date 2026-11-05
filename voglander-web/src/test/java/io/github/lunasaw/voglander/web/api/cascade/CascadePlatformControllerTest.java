@@ -24,7 +24,9 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeClientScheduler;
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.config.properties.VoglanderSipClientProperties;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeClientDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
+import io.github.lunasaw.voglander.manager.manager.CascadeClientManager;
 import io.github.lunasaw.voglander.manager.manager.CascadePlatformManager;
 import io.github.lunasaw.voglander.web.api.cascade.assembler.CascadeWebAssembler;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadePlatformVO;
@@ -41,14 +43,16 @@ import io.github.lunasaw.voglander.web.api.cascade.vo.CascadePlatformVO;
 class CascadePlatformControllerTest {
 
     /** 合法的 20 位平台 ID */
-    private static final String PLATFORM_ID    = "34020000002000000001";
-    /** 合法的 20 位本端客户端 ID */
-    private static final String LOCAL_CLIENT_ID = "34020000002000000002";
+    private static final String PLATFORM_ID     = "34020000002000000001";
+    /** 本端客户端主键（本类只用 mock，不关心库里的真实行） */
+    private static final Long   CLIENT_REF_ID   = 7L;
 
     @InjectMocks
     CascadePlatformController controller;
     @Mock
     CascadePlatformManager       cascadePlatformManager;
+    @Mock
+    CascadeClientManager         cascadeClientManager;
     @Mock
     CascadeClientScheduler       cascadeClientScheduler;
     @Mock
@@ -110,19 +114,17 @@ class CascadePlatformControllerTest {
     }
 
     @Test
-    @DisplayName("新增：未填本端地址/平台域时由后端补齐（sip.client + 平台ID前10位）")
+    @DisplayName("新增：未填平台域时由后端补齐（平台ID前10位）")
     void add_fills_defaults() throws Exception {
         when(cascadePlatformManager.add(any(CascadePlatformDTO.class))).thenReturn(91L);
-        when(sipClientProperties.getDomain()).thenReturn("192.168.118.7");
-        when(sipClientProperties.getPort()).thenReturn(5061);
 
         mvc.perform(post("/api/v1/cascade/platform")
             .contentType(MediaType.APPLICATION_JSON).content(createBody()))
             .andExpect(status().isOk());
 
-        verify(cascadePlatformManager).add(argThat(d -> "192.168.118.7".equals(d.getLocalIp())
-            && Integer.valueOf(5061).equals(d.getLocalPort())
-            && "3402000000".equals(d.getPlatformDomain())));
+        /* 本端 IP / 端口不再由 Controller 兜底：它们来自选中的客户端行，端口恒为 sip.client.port */
+        verify(cascadePlatformManager).add(argThat(d -> "3402000000".equals(d.getPlatformDomain())
+            && CLIENT_REF_ID.equals(d.getClientRefId())));
     }
 
     /* ---------------- 更新 ---------------- */
@@ -255,6 +257,36 @@ class CascadePlatformControllerTest {
     }
 
     @Test
+    @DisplayName("启用：客户端通告 IP 为空时回填到客户端表（不是逐条写平台）")
+    void enable_fills_client_ip_when_blank() throws Exception {
+        CascadePlatformDTO dto = platform(5L, 1);
+        dto.setLocalIp(null);
+        when(cascadePlatformManager.getById(5L)).thenReturn(dto);
+        when(cascadePlatformManager.enablePlatform(5L)).thenReturn(true);
+        when(sipClientProperties.getDomain()).thenReturn("192.168.118.7");
+
+        mvc.perform(post("/api/v1/cascade/platform/5/enable"))
+            .andExpect(status().isOk());
+
+        /* 写回客户端而不是平台：同一个客户端被多个上级引用时，回填一次对所有平台生效 */
+        verify(cascadeClientManager).update(argThat(c -> CLIENT_REF_ID.equals(c.getId())
+            && "192.168.118.7".equals(c.getClientIp())));
+    }
+
+    @Test
+    @DisplayName("启用：客户端 IP 已有值时不被当前网卡地址覆盖")
+    void enable_keeps_existing_client_ip() throws Exception {
+        CascadePlatformDTO dto = platform(5L, 1);
+        when(cascadePlatformManager.getById(5L)).thenReturn(dto);
+        when(cascadePlatformManager.enablePlatform(5L)).thenReturn(true);
+
+        mvc.perform(post("/api/v1/cascade/platform/5/enable"))
+            .andExpect(status().isOk());
+
+        verify(cascadeClientManager, never()).update(any(CascadeClientDTO.class));
+    }
+
+    @Test
     @DisplayName("启用：平台不存在时返回错误，不启用不调度")
     void enable_not_found() throws Exception {
         when(cascadePlatformManager.getById(5L)).thenReturn(null);
@@ -364,7 +396,7 @@ class CascadePlatformControllerTest {
         mvc.perform(post("/api/v1/cascade/platform")
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"platformId\":\"" + PLATFORM_ID + "\",\"platformIp\":\"10.0.0.1\","
-                + "\"platformPort\":5060,\"localClientId\":\"" + LOCAL_CLIENT_ID + "\","
+                + "\"platformPort\":5060,\"clientRefId\":" + CLIENT_REF_ID + ","
                 + "\"platformName\":\"  市公安局上级平台  \"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.data").value(92));
@@ -392,7 +424,9 @@ class CascadePlatformControllerTest {
         dto.setPlatformId(PLATFORM_ID);
         dto.setPlatformIp("10.0.0.1");
         dto.setPlatformPort(5060);
-        dto.setLocalClientId(LOCAL_CLIENT_ID);
+        dto.setClientRefId(CLIENT_REF_ID);
+        /* 派生字段由 Manager 填充，这里直接给值，验证 VO 原样透出 */
+        dto.setLocalClientId("34020000002000000002");
         dto.setLocalIp("192.168.118.7");
         dto.setLocalPort(5061);
         dto.setEnabled(enabled);
@@ -401,7 +435,7 @@ class CascadePlatformControllerTest {
 
     private static String createBody() {
         return "{\"platformId\":\"" + PLATFORM_ID + "\",\"platformIp\":\"10.0.0.1\","
-            + "\"platformPort\":5060,\"localClientId\":\"" + LOCAL_CLIENT_ID + "\"}";
+            + "\"platformPort\":5060,\"clientRefId\":" + CLIENT_REF_ID + "}";
     }
 
     /** 一条完整规则：省34/市02/县0000/行业00/网络0 + 起始序号 100，规则与父链开关都打开 */

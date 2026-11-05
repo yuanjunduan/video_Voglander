@@ -550,6 +550,30 @@ VALUES
 (60204, 602, 'CascadeChannelStatus', 'cascade.channel.status', 3, null, null, '', 4, 1, 'Cascade:Channel:Status',
  JSON_OBJECT('title', 'cascade.channel.status', 'hideInMenu', true));
 
+-- 插入级联本端客户端菜单（605）：本端向上级注册的身份（20 位平台编码 + Contact 头对外通告 IP）
+-- 排序在平台（601）之前：先有本端身份，上级平台才能引用它
+-- 取 605 而非 604：604 已被 1.0.13 的「级联运行状态」页占用
+INSERT INTO tb_menu (id, parent_id, menu_code, menu_name, menu_type, path, component, icon, sort_order, status,
+                     permission, meta)
+VALUES
+(605, 500, 'CascadeClient', 'cascade.client.title', 2, '/device/cascade/client', '/cascade/client/list',
+ 'mdi:account-network-outline', 2, 1, 'Cascade:Client:List',
+ JSON_OBJECT('icon', 'mdi:account-network-outline', 'title', 'cascade.client.title', 'hideInMenu', false));
+
+-- 级联本端客户端列表（605）按钮权限：新增 / 编辑 / 删除 / 设为默认
+INSERT INTO tb_menu (id, parent_id, menu_code, menu_name, menu_type, path, component, icon, sort_order, status,
+                     permission, meta)
+VALUES
+(60501, 605, 'CascadeClientCreate', 'cascade.client.create', 3, null, null, '', 1, 1, 'Cascade:Client:Create',
+ JSON_OBJECT('title', 'cascade.client.create', 'hideInMenu', true)),
+(60502, 605, 'CascadeClientEdit', 'cascade.client.edit', 3, null, null, '', 2, 1, 'Cascade:Client:Edit',
+ JSON_OBJECT('title', 'cascade.client.edit', 'hideInMenu', true)),
+(60503, 605, 'CascadeClientDelete', 'cascade.client.delete', 3, null, null, '', 3, 1, 'Cascade:Client:Delete',
+ JSON_OBJECT('title', 'cascade.client.delete', 'hideInMenu', true)),
+(60504, 605, 'CascadeClientDefault', 'cascade.client.setDefault', 3, null, null, '', 4, 1,
+ 'Cascade:Client:SetDefault',
+ JSON_OBJECT('title', 'cascade.client.setDefault', 'hideInMenu', true));
+
 -- 插入Project子菜单
 INSERT INTO tb_menu (id, parent_id, menu_code, menu_name, menu_type, path, component, icon, sort_order, status,
                      permission, meta)
@@ -756,6 +780,34 @@ CREATE TABLE `tb_device_position`
 
 
 -- ----------------------------
+-- Table structure for tb_cascade_client  (级联本端客户端：本端平台身份)
+-- 只登记「我们是谁」：国标编码 + 对外通告 IP。端口不落库——一个客户端协议栈只监听
+-- 一个 socket（sip.client.port），存副本只会制造「表里 5062、实际听 5061」的隐性故障。
+-- 注意与 sip.client.clientId（设备侧客户端身份）不是一回事：上级认的是本表的 client_id。
+-- ----------------------------
+DROP TABLE IF EXISTS `tb_cascade_client`;
+CREATE TABLE `tb_cascade_client`
+(
+    `id`          BIGINT UNSIGNED                                       NOT NULL AUTO_INCREMENT,
+    `create_time` DATETIME                                              NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `update_time` DATETIME                                              NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+    `client_id`   VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '本端平台编码(20位)，创建后不可改',
+    `client_name` VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '' COMMENT '本地辨识名，空=未命名',
+    `client_ip`   VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '' COMMENT '对外通告IP(Contact/From用)，必须是上级可回包地址',
+    `is_default`  TINYINT                                               NOT NULL DEFAULT 0 COMMENT '新增上级平台时默认预选 0否 1是(全局唯一)',
+    `enabled`     TINYINT                                               NOT NULL DEFAULT 1 COMMENT '1启用 0禁用',
+    `remark`      VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin         DEFAULT NULL COMMENT '备注',
+    `extend`      TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '扩展字段(FastJSON2)',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_cascade_client_id` (`client_id`) USING BTREE,
+    KEY `idx_cascade_client_default` (`is_default`) USING BTREE
+) ENGINE = InnoDB
+  AUTO_INCREMENT = 1
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_bin COMMENT ='级联本端客户端表';
+
+
+-- ----------------------------
 -- Table structure for tb_cascade_platform  (级联上级平台)
 -- ----------------------------
 DROP TABLE IF EXISTS `tb_cascade_platform`;
@@ -771,9 +823,7 @@ CREATE TABLE `tb_cascade_platform`
     `platform_name`      VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '' COMMENT '平台名称(本地辨识用，空=未命名)',
     `username`           VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '' COMMENT '注册用户名',
     `password`           VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '' COMMENT '注册密码',
-    `local_client_id`    VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '本地模拟客户端ID',
-    `local_ip`           VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin          DEFAULT NULL COMMENT '本地IP',
-    `local_port`         INT                                                   NOT NULL DEFAULT 5061 COMMENT '本地端口',
+    `client_ref_id`      BIGINT UNSIGNED                                          DEFAULT NULL COMMENT '本端客户端(tb_cascade_client.id)，应用层必填',
     `enabled`            TINYINT                                               NOT NULL DEFAULT 1 COMMENT '1启用 0禁用',
     `register_status`    TINYINT                                               NOT NULL DEFAULT 0 COMMENT '0离线 1在线 2注册中 3失败',
     `keepalive_interval` INT                                                   NOT NULL DEFAULT 60 COMMENT '保活心跳间隔(秒)',
@@ -791,7 +841,8 @@ CREATE TABLE `tb_cascade_platform`
     `publish_ancestors`  TINYINT                                               NOT NULL DEFAULT 0 COMMENT '发布策略 0=勾选组织时缺祖先即报错 1=自动补推缺失的祖先链',
     `extend`             TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '扩展字段(FastJSON2)',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_cascade_platform_id` (`platform_id`) USING BTREE
+    UNIQUE KEY `uk_cascade_platform_id` (`platform_id`) USING BTREE,
+    KEY `idx_cascade_platform_client` (`client_ref_id`) USING BTREE
 ) ENGINE = InnoDB
   AUTO_INCREMENT = 1
   DEFAULT CHARSET = utf8mb4

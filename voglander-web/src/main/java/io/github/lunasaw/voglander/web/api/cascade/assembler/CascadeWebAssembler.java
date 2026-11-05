@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeBlockedOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeClientDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgCatalog;
@@ -17,6 +18,8 @@ import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelBatchBindRe
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelCreateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelPageReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelUpdateReq;
+import io.github.lunasaw.voglander.web.api.cascade.req.CascadeClientCreateReq;
+import io.github.lunasaw.voglander.web.api.cascade.req.CascadeClientUpdateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeOrgCreateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeOrgUpdateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformCodeRuleReq;
@@ -45,6 +48,41 @@ import java.util.List;
 @Component
 public class CascadeWebAssembler {
 
+    // ==================== 本端客户端 ====================
+
+    /**
+     * 本端客户端新增请求 → DTO。
+     */
+    public CascadeClientDTO toDTO(CascadeClientCreateReq req) {
+        if (req == null) {
+            return null;
+        }
+        CascadeClientDTO dto = new CascadeClientDTO();
+        dto.setClientId(req.getClientId());
+        dto.setClientName(req.getClientName());
+        dto.setClientIp(req.getClientIp());
+        dto.setIsDefault(req.getIsDefault());
+        dto.setEnabled(req.getEnabled());
+        dto.setRemark(req.getRemark());
+        return dto;
+    }
+
+    /**
+     * 本端客户端更新请求 → DTO（无 clientId：编码创建后不可改）。
+     */
+    public CascadeClientDTO toDTO(CascadeClientUpdateReq req) {
+        if (req == null) {
+            return null;
+        }
+        CascadeClientDTO dto = new CascadeClientDTO();
+        dto.setClientName(req.getClientName());
+        dto.setClientIp(req.getClientIp());
+        dto.setIsDefault(req.getIsDefault());
+        dto.setEnabled(req.getEnabled());
+        dto.setRemark(req.getRemark());
+        return dto;
+    }
+
     // ==================== 平台 ====================
 
     /**
@@ -62,9 +100,8 @@ public class CascadeWebAssembler {
         dto.setPlatformName(req.getPlatformName());
         dto.setUsername(req.getUsername());
         dto.setPassword(req.getPassword());
-        dto.setLocalClientId(req.getLocalClientId());
-        dto.setLocalIp(req.getLocalIp());
-        dto.setLocalPort(req.getLocalPort());
+        /* 本端身份只传引用：编码与通告 IP 由客户端表提供，装配层不再接触这两个值 */
+        dto.setClientRefId(req.getClientRefId());
         dto.setKeepaliveInterval(req.getKeepaliveInterval());
         dto.setRegisterExpires(req.getRegisterExpires());
         dto.setCharset(req.getCharset());
@@ -93,9 +130,8 @@ public class CascadeWebAssembler {
         dto.setPlatformName(req.getPlatformName());
         dto.setUsername(req.getUsername());
         dto.setPassword(req.getPassword());
-        dto.setLocalClientId(req.getLocalClientId());
-        dto.setLocalIp(req.getLocalIp());
-        dto.setLocalPort(req.getLocalPort());
+        /* 本端身份只传引用：编码与通告 IP 由客户端表提供，装配层不再接触这两个值 */
+        dto.setClientRefId(req.getClientRefId());
         dto.setKeepaliveInterval(req.getKeepaliveInterval());
         dto.setRegisterExpires(req.getRegisterExpires());
         dto.setCharset(req.getCharset());

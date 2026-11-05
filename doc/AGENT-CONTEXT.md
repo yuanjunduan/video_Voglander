@@ -135,6 +135,23 @@ mvn test -pl voglander-web -am "-Dtest=Cascade*Test" "-Dsurefire.failIfNoSpecifi
   - 设备删除编排在 `DeviceRemovalManager`（撤销 → 发布层 → 本地通道 → 设备本体，顺序不可换），`DeviceController` 两个删除接口都走它，**前端不要再自己拼「先删通道再删设备」**。主动路径已同步发过 `DEL`，不能再让 `afterCommit` 事件链路发第二遍；只有被动路径仍按平台在提交后合并成一个 `DEL` 事件（拆开发会被 4 线程的 `sipNotifierExecutor` 乱序执行，父节点先没了子节点的删除会被部分上级忽略）。
 - 快照是**增量 upsert**：节点「这次没出现」不会被上级删除，**必须显式推 `DEL`**。
 
+### 4.6 本端身份只在 `tb_cascade_client`（1.10.5）
+
+向上级注册的身份 = 20 位平台编码 + Contact 头对外通告 IP，**只存在客户端表**；
+`tb_cascade_platform` 只剩可空 `client_ref_id` 外键，原来的 `local_client_id / local_ip / local_port` 三列已删。
+
+- **读路径派生**：`CascadePlatformManager.fillDerived` 按 `client_ref_id` 填 `localClientId/localIp/localPort`
+  （端口恒取 `sip.client.port`，不落库）。DTO 保留这三个字段只是为了让 integration 侧拼 From 头的代码零改动，
+  **不能**再把它们当存储字段写回平台表。
+- **写路径**：新增平台必须带 `clientRefId`（`Assert` 拦截）；改客户端的 `client_ip` 会
+  `stopPlatform → startPlatform` 重建引用它的 `enabled=1` 平台任务。
+- **删除有引用保护**：仍被平台引用时抛 `IllegalStateException`，Controller 转可读错误，不做级联删除。
+- **编码创建后不可改**：换编码等于换 From 头身份，上级侧已建对象全部认不出来。
+- 迁移脚本：`sql/migration/{mysql,postgresql,sqlite}/1.10.5-cascade-client.sql`；老 SQLite 库由
+  `SqliteCascadeClientSchemaMigrator` 就地补表 / 删列 / 回填。
+- 菜单：页面 `605` + 按钮 `60501`–`60504`（三份初始化 SQL 同步）。
+  **`604` 已被 1.0.13 的「级联运行状态」页占用**，新增菜单前先在三份 SQL 里 grep 主键确认空闲段。
+
 ---
 
 ## 5. 媒体 / 直播链路
@@ -232,6 +249,7 @@ npx vitest run apps/web-antd/src/views/cascade
 | 17 | 删除用例集体等满 10s 后报「上级未响应」 | `BaseTest`/`BaseAsyncTest` 启用了 `sip.client.enabled`，真会发 UDP；测试基座必须 `@Import` `CascadeRevokeTestConfig`，用 `@Primary` 的 `StubCascadeCatalogRevokeService` 放行，再按用例 `refuse/noResponse/sendFailed` 复现阻断 |
 | 18 | 撤销逻辑把 SQLite 整库写锁占住 10s | 同步 SIP 等待困在事务里；撤销放事务外，本地删除用 `TransactionTemplate` |
 | 19 | 页面删除失败只看到「操作失败」，看不出哪个平台没确认 | `deleteOne/deleteBatch` 里的 `catch (IllegalArgumentException) { throw e; }` 不能省，否则撤销原因会被洗成通用错误码；全局 `errorMessageResponseInterceptor` 已自动 `message.error` 后端 `message`，页面不要再重复弹一次 |
+| 20 | 平台表又冒出 `local_*` 列 / 注册身份与页面不一致 | 本端身份只在 `tb_cascade_client`（见 4.6）；平台侧只存 `client_ref_id`，`localClientId/localIp/localPort` 是派生值 |
 
 ---
 

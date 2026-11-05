@@ -82,23 +82,9 @@ public class CascadePlatformUpdateReq implements Serializable {
     private String  password;
 
     /**
-     * 本端客户端国标 ID
+     * 本端客户端主键；null 表示不改，换了客户端等于换注册身份。
      */
-    @Pattern(regexp = "^(\\d{20})?$", message = "本端客户端ID必须为 20 位数字")
-    private String  localClientId;
-
-    /**
-     * 本端 IP
-     */
-    @Pattern(regexp = CascadeConstant.IPV4_REGEX, message = "本端IP格式不正确")
-    private String  localIp;
-
-    /**
-     * 本端端口；必须与 SIP 客户端监听端口一致
-     */
-    @Min(value = 1, message = "本端端口范围 1-65535")
-    @Max(value = 65535, message = "本端端口范围 1-65535")
-    private Integer localPort;
+    private Long    clientRefId;
 
     /**
      * 保活心跳间隔（秒）

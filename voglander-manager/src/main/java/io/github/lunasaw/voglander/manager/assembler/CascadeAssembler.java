@@ -1,11 +1,13 @@
 package io.github.lunasaw.voglander.manager.assembler;
 
 import com.alibaba.fastjson2.JSON;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeClientDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePublishDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeSubscribeDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeRecordRequestDTO;
+import io.github.lunasaw.voglander.repository.entity.CascadeClientDO;
 import io.github.lunasaw.voglander.repository.entity.CascadeOrgDO;
 import io.github.lunasaw.voglander.repository.entity.CascadePlatformDO;
 import io.github.lunasaw.voglander.repository.entity.CascadePublishDO;
@@ -13,6 +15,16 @@ import io.github.lunasaw.voglander.repository.entity.CascadeSubscribeDO;
 import io.github.lunasaw.voglander.repository.entity.CascadeRecordRequestDO;
 
 public class CascadeAssembler {
+
+    public static CascadeClientDTO toDTO(CascadeClientDO src) {
+        if (src == null) return null;
+        return JSON.parseObject(JSON.toJSONString(src), CascadeClientDTO.class);
+    }
+
+    public static CascadeClientDO toDO(CascadeClientDTO src) {
+        if (src == null) return null;
+        return JSON.parseObject(JSON.toJSONString(src), CascadeClientDO.class);
+    }
 
     public static CascadePlatformDTO toDTO(CascadePlatformDO src) {
         if (src == null) return null;

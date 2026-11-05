@@ -35,10 +35,14 @@ public class CascadePlatformDO implements Serializable {
     private String        username;
     private String        password;
 
-    /** 本地模拟客户端ID */
-    private String        localClientId;
-    private String        localIp;
-    private Integer       localPort;
+    /**
+     * 本端客户端引用（{@code tb_cascade_client.id}）。
+     *
+     * <p>本端平台编码与对外通告 IP 已抽取到客户端表：多个上级可以引用同一条客户端，
+     * 改一次 IP 对所有引用它的平台同时生效。列本身可空是为了让存量库先加列再回填，
+     * 「必填」由应用层（{@code CascadePlatformManager#add}）与全量建表 DDL 共同表达。
+     */
+    private Long          clientRefId;
 
     /** 1-启用 0-禁用 */
     private Integer       enabled;

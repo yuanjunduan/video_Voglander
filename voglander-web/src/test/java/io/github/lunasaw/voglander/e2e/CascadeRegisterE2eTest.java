@@ -15,7 +15,9 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 
 import io.github.lunasaw.gbproxy.client.eventbus.event.ClientRegisterFailureEvent;
 import io.github.lunasaw.gbproxy.client.eventbus.event.ClientRegisterSuccessEvent;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeClientDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
+import io.github.lunasaw.voglander.manager.manager.CascadeClientManager;
 import io.github.lunasaw.voglander.manager.manager.CascadePlatformManager;
 import io.github.lunasaw.voglander.repository.entity.CascadePlatformDO;
 import io.github.lunasaw.voglander.repository.mapper.CascadePlatformMapper;
@@ -36,12 +38,13 @@ class CascadeRegisterE2eTest extends BaseE2eTest {
     @Autowired private ApplicationEventPublisher eventPublisher;
     @Autowired private CascadePlatformMapper     platformMapper;
     @Autowired private CascadePlatformManager    platformManager;
+    @Autowired private CascadeClientManager      clientManager;
 
     @BeforeEach
     void setupPlatform() {
         CascadePlatformDTO dto = new CascadePlatformDTO();
         dto.setPlatformId(PLATFORM_ID);
-        dto.setLocalClientId(LOCAL_CLIENT_ID);
+        dto.setClientRefId(ensureLocalClient());
         dto.setPlatformIp("127.0.0.1");
         dto.setPlatformPort(5060);
         dto.setPlatformDomain(PLATFORM_ID);
@@ -49,10 +52,27 @@ class CascadeRegisterE2eTest extends BaseE2eTest {
         platformManager.add(dto);
     }
 
+    /** 本端身份现在只在客户端表里登记：先复用既有行，没有才新建（本类不在事务里，重跑不能报唯一键冲突） */
+    private Long ensureLocalClient() {
+        CascadeClientDTO existed = clientManager.getByClientId(LOCAL_CLIENT_ID);
+        if (existed != null) {
+            return existed.getId();
+        }
+        CascadeClientDTO client = new CascadeClientDTO();
+        client.setClientId(LOCAL_CLIENT_ID);
+        client.setClientName("E2E 本端");
+        client.setClientIp("127.0.0.1");
+        return clientManager.add(client);
+    }
+
     @AfterEach
     void cleanup() {
         platformMapper.delete(Wrappers.<CascadePlatformDO>lambdaQuery()
             .eq(CascadePlatformDO::getPlatformId, PLATFORM_ID));
+        CascadeClientDTO client = clientManager.getByClientId(LOCAL_CLIENT_ID);
+        if (client != null) {
+            clientManager.delete(client.getId());
+        }
     }
 
     @Test

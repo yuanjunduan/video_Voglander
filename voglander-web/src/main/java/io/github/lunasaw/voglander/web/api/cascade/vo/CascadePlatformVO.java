@@ -82,17 +82,22 @@ public class CascadePlatformVO implements Serializable {
     private String  password;
 
     /**
-     * 本端客户端国标 ID（20 位）
+     * 本端客户端主键（编辑时回传给下拉框）
+     */
+    private Long    clientRefId;
+
+    /**
+     * 本端平台编码（只读派生值：来自 clientRefId 指向的客户端）
      */
     private String  localClientId;
 
     /**
-     * 本端 IP
+     * Contact 头对外通告 IP（只读派生值）
      */
     private String  localIp;
 
     /**
-     * 本端端口
+     * SIP 监听端口（只读派生值，恒为 sip.client.port）
      */
     private Integer localPort;
 
@@ -215,6 +220,7 @@ public class CascadePlatformVO implements Serializable {
         vo.setPlatformDomain(dto.getPlatformDomain());
         vo.setPlatformName(dto.getPlatformName());
         vo.setUsername(dto.getUsername());
+        vo.setClientRefId(dto.getClientRefId());
         /* 密码不回传：编辑时留空由后端保留原值 */
         vo.setLocalClientId(dto.getLocalClientId());
         vo.setLocalIp(dto.getLocalIp());

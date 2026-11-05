@@ -20,9 +20,11 @@ import io.github.lunasaw.voglander.BaseTest;
 import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.CodeSource;
 import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.PublishObjectType;
 import io.github.lunasaw.voglander.manager.code.CascadeCodeResolver;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeClientDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePublishDTO;
+import io.github.lunasaw.voglander.manager.manager.CascadeClientManager;
 import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
 import io.github.lunasaw.voglander.manager.manager.CascadePlatformManager;
 import io.github.lunasaw.voglander.manager.manager.CascadePublishManager;
@@ -54,6 +56,12 @@ class CascadePlatformCodeRuleTest extends BaseTest {
 
     @Autowired
     private CascadeCodeResolver    cascadeCodeResolver;
+
+    @Autowired
+    private CascadeClientManager   cascadeClientManager;
+
+    /** 本端客户端主键：平台表只存外键，本端编码/IP 由这条记录派生 */
+    private Long                   localClientRefId;
 
     @AfterEach
     void closeGlobalSwitch() {
@@ -381,7 +389,7 @@ class CascadePlatformCodeRuleTest extends BaseTest {
         dto.setPlatformIp("192.168.1.200");
         dto.setPlatformPort(5060);
         dto.setPlatformDomain(platformId.substring(0, 10));
-        dto.setLocalClientId(UniqueKeyFactory.deviceId());
+        dto.setClientRefId(localClientRefId());
         dto.setCodeRuleEnabled(ruleEnabled);
         dto.setCodeProvince(province);
         dto.setCodeCity(city);
@@ -390,6 +398,22 @@ class CascadePlatformCodeRuleTest extends BaseTest {
         dto.setCodeNetwork(network);
         dto.setCodeStartSeq(startSeq);
         return cascadePlatformManager.add(dto);
+    }
+
+    /**
+     * 取一条本端客户端：平台新增必须引用它（等价于界面上先建本端身份再建上级平台）。
+     *
+     * <p>BaseTest 是事务回滚的，每个用例都要自己建，不能靠类级固定行。
+     */
+    private Long localClientRefId() {
+        if (localClientRefId == null) {
+            CascadeClientDTO client = new CascadeClientDTO();
+            client.setClientId(UniqueKeyFactory.gbId());
+            client.setClientName("code-rule-test");
+            client.setClientIp("192.168.1.100");
+            localClientRefId = cascadeClientManager.add(client);
+        }
+        return localClientRefId;
     }
 
     /** 带组织规则的 DTO：用于验证「平台段整体压过组织段」 */

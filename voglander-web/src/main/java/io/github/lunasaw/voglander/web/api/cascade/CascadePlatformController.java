@@ -25,7 +25,9 @@ import io.github.lunasaw.voglander.common.domain.AjaxResult;
 import io.github.lunasaw.voglander.common.util.SensitiveUtils;
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeClientScheduler;
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.config.properties.VoglanderSipClientProperties;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeClientDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
+import io.github.lunasaw.voglander.manager.manager.CascadeClientManager;
 import io.github.lunasaw.voglander.manager.manager.CascadePlatformManager;
 import io.github.lunasaw.voglander.web.api.cascade.assembler.CascadeWebAssembler;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformCodeRuleReq;
@@ -67,6 +69,9 @@ public class CascadePlatformController {
     private CascadePlatformManager    cascadePlatformManager;
 
     @Autowired
+    private CascadeClientManager      cascadeClientManager;
+
+    @Autowired
     private CascadeClientScheduler    cascadeClientScheduler;
 
     @Autowired
@@ -93,10 +98,9 @@ public class CascadePlatformController {
             return AjaxResult.error("平台ID已存在：" + dto.getPlatformId());
         }
 
-        log.info("级联平台新增: id={}, platformId={}, target={}:{}, localClientId={}@{}:{}, transport={}, username={}, password={}",
+        log.info("级联平台新增: id={}, platformId={}, target={}:{}, clientRefId={}, transport={}, username={}, password={}",
             id, dto.getPlatformId(), dto.getPlatformIp(), dto.getPlatformPort(),
-            dto.getLocalClientId(), dto.getLocalIp(), dto.getLocalPort(),
-            dto.getTransport(), dto.getUsername(), SensitiveUtils.mask(dto.getPassword()));
+            dto.getClientRefId(), dto.getTransport(), dto.getUsername(), SensitiveUtils.mask(dto.getPassword()));
         startSchedulerIfEnabled(id);
         return AjaxResult.success(id);
     }
@@ -210,14 +214,9 @@ public class CascadePlatformController {
         if (platform == null) {
             return AjaxResult.error("上级平台不存在：" + id);
         }
-        /* 启用前检查 localIp：前端未填则用当前 SIP 客户端绑定 IP 回填并持久化 */
-        if (StringUtils.isBlank(platform.getLocalIp())) {
-            CascadePlatformDTO patch = new CascadePlatformDTO();
-            patch.setId(id);
-            patch.setLocalIp(sipClientProperties.getDomain());
-            patch.setLocalPort(sipClientProperties.getPort());
-            cascadePlatformManager.update(patch);
-        }
+        /* 启用前检查本端通告 IP：客户端没填时用当前 SIP 客户端绑定地址回填并持久化。
+           不检查的话，平台会以「在线」状态出现，但上级回叫（INVITE / 订阅）全部不到位 */
+        ensureClientIpFilled(platform);
         boolean ok = cascadePlatformManager.enablePlatform(id);
         if (ok) {
             log.info("级联平台启用: id={}, platformId={}", id, platform.getPlatformId());
@@ -244,20 +243,41 @@ public class CascadePlatformController {
     }
 
     /**
-     * 补齐未传的默认值：本端地址取 SIP 客户端实际绑定地址，平台域缺省取平台ID前 10 位。
+     * 补齐未传的默认值：平台域缺省取平台ID前 10 位。
      *
      * <p>platform_domain 在库中是 NOT NULL，而前端标为可选，这里统一兜底避免插入失败。</p>
+     *
+     * <p>本端 IP / 端口不再在这里兜底：它们由选中的客户端提供，
+     * 端口恒为 {@code sip.client.port}，IP 缺失在启用时补（见 {@link #ensureClientIpFilled}）。</p>
      *
      * @param dto 待保存的平台配置
      */
     private void applyDefaults(CascadePlatformDTO dto) {
-        if (StringUtils.isBlank(dto.getLocalIp())) {
-            dto.setLocalIp(sipClientProperties.getDomain());
-        }
-        if (dto.getLocalPort() == null) {
-            dto.setLocalPort(sipClientProperties.getPort());
-        }
         applyPlatformDomainDefault(dto);
+    }
+
+    /**
+     * 客户端没填对外通告 IP 时用当前 SIP 客户端绑定地址回填。
+     *
+     * <p>写回客户端而不是平台：同一个客户端被多个上级引用时，回填一次对所有平台生效。
+     * 也只回填空值——用户显式填过的地址不能被“当前网卡地址”覆盖，
+     * 否则双网卡/更换网络后会静默改掉一个本来正确的配置。
+     *
+     * @param platform 待启用的平台
+     */
+    private void ensureClientIpFilled(CascadePlatformDTO platform) {
+        if (platform == null || platform.getClientRefId() == null || StringUtils.isNotBlank(platform.getLocalIp())) {
+            return;
+        }
+        if (StringUtils.isBlank(sipClientProperties.getDomain())) {
+            return;
+        }
+        CascadeClientDTO patch = new CascadeClientDTO();
+        patch.setId(platform.getClientRefId());
+        patch.setClientIp(sipClientProperties.getDomain());
+        cascadeClientManager.update(patch);
+        log.info("级联本端客户端通告 IP 为空，已回填: clientRefId={}, clientIp={}", platform.getClientRefId(),
+            sipClientProperties.getDomain());
     }
 
     /**

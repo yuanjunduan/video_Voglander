@@ -63,7 +63,7 @@ public class SqliteSchemaInitializer {
      * 权威脚本应建出的 {@code tb_} 业务表数：旧基线去掉 export 后为 20 张，新增通用任务三表、图像三表、
      * 级联组织表、级联发布表与系统配置表；1.10.2 通道老表退场后再减一张。
      */
-    private static final int    EXPECTED_TABLE_COUNT = 28;
+    private static final int    EXPECTED_TABLE_COUNT = 29;
 
     /** 1.0.9 之前可无损升级的合法业务表数。 */
     private static final int    LEGACY_TABLE_COUNT   = 21;
@@ -113,6 +113,9 @@ public class SqliteSchemaInitializer {
     @Autowired(required = false)
     private SqliteSysConfigSchemaMigrator          sysConfigSchemaMigrator;
 
+    @Autowired(required = false)
+    private SqliteCascadeClientSchemaMigrator      cascadeClientSchemaMigrator;
+
     /**
      * 启动时按需初始化 SQLite schema。非 SQLite 跳过；已建全库跳过。
      * <p>
@@ -151,6 +154,7 @@ public class SqliteSchemaInitializer {
                 migrateCascadeChannelCodePushStatusSchema();
                 migrateCascadeChannelDropSchema();
                 migrateSysConfigSchema();
+                migrateCascadeClientSchema();
                 verifySchemaComplete();
                 log.debug("SQLite 已有业务表且迁移后表数达标，跳过全量建表");
                 return;
@@ -180,6 +184,7 @@ public class SqliteSchemaInitializer {
             migrateCascadeChannelCodePushStatusSchema();
             migrateCascadeChannelDropSchema();
             migrateSysConfigSchema();
+            migrateCascadeClientSchema();
             verifySchemaComplete();
             log.info("SQLite schema 初始化完成（建表 {} 张 + 默认 admin/角色/菜单种子）", EXPECTED_TABLE_COUNT);
         } catch (RuntimeException e) {
@@ -420,6 +425,22 @@ public class SqliteSchemaInitializer {
         SqliteSysConfigSchemaMigrator migrator = sysConfigSchemaMigrator;
         if (migrator == null) {
             migrator = new SqliteSysConfigSchemaMigrator();
+            migrator.setDataSource(dataSource);
+        }
+        migrator.migrate();
+    }
+
+    /**
+     * 级联「本端客户端」抽取的幂等迁移（1.10.5：建 {@code tb_cascade_client}、平台表补
+     * {@code client_ref_id}、搬走并删除 {@code local_client_id / local_ip / local_port}）。
+     *
+     * <p>排在最后：它要读其它迁移已经对齐完的平台表，且删列是不可逆的最后一步；
+     * 也必须先于 {@code verifySchemaComplete()}，否则老库会因新增的那张表未建被「表数不足」阻断。
+     */
+    private void migrateCascadeClientSchema() {
+        SqliteCascadeClientSchemaMigrator migrator = cascadeClientSchemaMigrator;
+        if (migrator == null) {
+            migrator = new SqliteCascadeClientSchemaMigrator();
             migrator.setDataSource(dataSource);
         }
         migrator.migrate();

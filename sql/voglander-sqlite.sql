@@ -550,6 +550,30 @@ VALUES
 (60204, 602, 'CascadeChannelStatus', 'cascade.channel.status', 3, null, null, '', 4, 1, 'Cascade:Channel:Status',
  '{"title": "cascade.channel.status", "hideInMenu": true}');
 
+-- 插入级联本端客户端菜单（605）：本端向上级注册的身份（20 位平台编码 + Contact 头对外通告 IP）
+-- 排序在平台（601）之前：先有本端身份，上级平台才能引用它
+-- 取 605 而非 604：604 已被 1.0.13 的「级联运行状态」页占用
+INSERT OR IGNORE INTO tb_menu (id, parent_id, menu_code, menu_name, menu_type, path, component, icon, sort_order,
+                               status, permission, meta)
+VALUES
+(605, 500, 'CascadeClient', 'cascade.client.title', 2, '/device/cascade/client', '/cascade/client/list',
+ 'mdi:account-network-outline', 2, 1, 'Cascade:Client:List',
+ '{"icon": "mdi:account-network-outline", "title": "cascade.client.title", "hideInMenu": false}');
+
+-- 级联本端客户端列表（605）按钮权限：新增 / 编辑 / 删除 / 设为默认
+INSERT OR IGNORE INTO tb_menu (id, parent_id, menu_code, menu_name, menu_type, path, component, icon, sort_order,
+                               status, permission, meta)
+VALUES
+(60501, 605, 'CascadeClientCreate', 'cascade.client.create', 3, null, null, '', 1, 1, 'Cascade:Client:Create',
+ '{"title": "cascade.client.create", "hideInMenu": true}'),
+(60502, 605, 'CascadeClientEdit', 'cascade.client.edit', 3, null, null, '', 2, 1, 'Cascade:Client:Edit',
+ '{"title": "cascade.client.edit", "hideInMenu": true}'),
+(60503, 605, 'CascadeClientDelete', 'cascade.client.delete', 3, null, null, '', 3, 1, 'Cascade:Client:Delete',
+ '{"title": "cascade.client.delete", "hideInMenu": true}'),
+(60504, 605, 'CascadeClientDefault', 'cascade.client.setDefault', 3, null, null, '', 4, 1,
+ 'Cascade:Client:SetDefault',
+ '{"title": "cascade.client.setDefault", "hideInMenu": true}');
+
 -- 插入Project子菜单
 INSERT OR IGNORE INTO tb_menu (id, parent_id, menu_code, menu_name, menu_type, path, component, icon, sort_order,
                                status, permission, meta)
@@ -739,7 +763,34 @@ FROM tb_menu
 WHERE id IN (305, 30501, 30502);
 
 -- ----------------------------
--- 级联上级平台表
+-- 级联本端客户端表（本端平台身份，多个上级平台共用同一份身份可选）
+-- 只登记「我们是谁」：国标编码 + 对外通告 IP。端口不落库——一个客户端协议栈只监听
+-- 一个 socket（sip.client.port），存一份副本只会制造「表里 5062、实际听 5061」的隐性故障。
+-- 注意与 sip.client.clientId（设备侧客户端身份）不是一回事：上级认的是本表的 client_id。
+-- ----------------------------
+DROP TABLE IF EXISTS tb_cascade_client;
+CREATE TABLE tb_cascade_client
+(
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    create_time DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    update_time DATETIME     DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    -- 本端平台编码（20 位）。创建后不可改：上级按它登记下级域，换码等于换一个下级
+    client_id   VARCHAR(64)                            NOT NULL,
+    -- 本地辨识名，空=未命名
+    client_name VARCHAR(128) DEFAULT ''                NOT NULL,
+    -- 对外通告 IP（Contact/From 用）：必须是上级可回包的地址，NAT 场景填出口地址
+    client_ip   VARCHAR(64)  DEFAULT ''                NOT NULL,
+    -- 新增上级平台时默认预选的那一条，全局唯一（应用层保证）
+    is_default  INTEGER      DEFAULT 0                 NOT NULL,
+    enabled     INTEGER      DEFAULT 1                 NOT NULL,
+    remark      VARCHAR(255) DEFAULT NULL,
+    extend      TEXT
+);
+CREATE UNIQUE INDEX uk_cascade_client_id ON tb_cascade_client (client_id);
+CREATE INDEX idx_cascade_client_default ON tb_cascade_client (is_default);
+
+-- ----------------------------
+-- 级联上级平台表（上级平台配置；本端身份由 client_ref_id 指向 tb_cascade_client）
 -- ----------------------------
 DROP TABLE IF EXISTS tb_cascade_platform;
 CREATE TABLE tb_cascade_platform
@@ -755,9 +806,10 @@ CREATE TABLE tb_cascade_platform
     platform_name      VARCHAR(128) DEFAULT ''                NOT NULL,
     username           VARCHAR(64)  DEFAULT ''                NOT NULL,
     password           VARCHAR(128) DEFAULT ''                NOT NULL,
-    local_client_id    VARCHAR(64)                            NOT NULL,
-    local_ip           VARCHAR(64)  DEFAULT NULL,
-    local_port         INTEGER      DEFAULT 5061              NOT NULL,
+    -- 本端平台身份外键。可空仅为兼容「SQLite 加列不支持无默认值的 NOT NULL」，
+    -- 应用层按必填校验（新增/启停均拒绝空引用）。
+    -- 本端编码/通告 IP 与端口不再冗余在本表：端口恒取 sip.client.port，其余从本端客户端行派生。
+    client_ref_id      INTEGER      DEFAULT NULL,
     enabled            INTEGER      DEFAULT 1                 NOT NULL,
     register_status    INTEGER      DEFAULT 0                 NOT NULL,
     keepalive_interval INTEGER      DEFAULT 60                NOT NULL,
@@ -778,6 +830,7 @@ CREATE TABLE tb_cascade_platform
     extend             TEXT
 );
 CREATE UNIQUE INDEX uk_cascade_platform_id ON tb_cascade_platform (platform_id);
+CREATE INDEX idx_cascade_platform_client ON tb_cascade_platform (client_ref_id);
 
 -- ----------------------------
 -- 级联组织树表（本地资产，全局一套，不绑定上级平台；推给哪些平台由 tb_cascade_publish 表达）

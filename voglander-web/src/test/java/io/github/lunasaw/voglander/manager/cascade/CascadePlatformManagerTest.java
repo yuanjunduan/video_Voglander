@@ -11,7 +11,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 
 import io.github.lunasaw.voglander.BaseTest;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeClientDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformDTO;
+import io.github.lunasaw.voglander.manager.manager.CascadeClientManager;
 import io.github.lunasaw.voglander.manager.manager.CascadePlatformManager;
 import io.github.lunasaw.voglander.support.UniqueKeyFactory;
 
@@ -24,15 +26,27 @@ class CascadePlatformManagerTest extends BaseTest {
     @Autowired
     private CascadePlatformManager cascadePlatformManager;
 
-    /** 构造最小合法 DTO */
+    @Autowired
+    private CascadeClientManager   cascadeClientManager;
+
+    /** 构造最小合法 DTO：本端身份改为引用客户端表的一行 */
     private CascadePlatformDTO buildDto(String platformId) {
         CascadePlatformDTO dto = new CascadePlatformDTO();
         dto.setPlatformId(platformId);
         dto.setPlatformIp("192.168.1.100");
         dto.setPlatformPort(5060);
         dto.setPlatformDomain("3402000000");
-        dto.setLocalClientId(UniqueKeyFactory.deviceId());
+        dto.setClientRefId(newClient("192.168.118.7"));
         return dto;
+    }
+
+    /** 造一条本端客户端，返回其主键 */
+    private Long newClient(String clientIp) {
+        CascadeClientDTO client = new CascadeClientDTO();
+        client.setClientId(UniqueKeyFactory.gbId());
+        client.setClientName("测试本端");
+        client.setClientIp(clientIp);
+        return cascadeClientManager.add(client);
     }
 
     @Nested
@@ -209,6 +223,133 @@ class CascadePlatformManagerTest extends BaseTest {
             cascadePlatformManager.add(buildDto(UniqueKeyFactory.deviceId()));
             Page<CascadePlatformDTO> page = cascadePlatformManager.getPage(null, 1, 10);
             assertTrue(page.getTotal() >= 1);
+        }
+    }
+
+    @Nested
+    @DisplayName("localIdentity - 本端身份派生")
+    class LocalIdentity {
+
+        @Test
+        @DisplayName("读平台时按 clientRefId 派生编码与 IP，端口取自 sip.client.port")
+        void should_derive_local_identity_from_client() {
+            String clientId = UniqueKeyFactory.gbId();
+            CascadeClientDTO client = new CascadeClientDTO();
+            client.setClientId(clientId);
+            client.setClientIp("10.0.0.5");
+            Long clientRefId = cascadeClientManager.add(client);
+
+            String platformId = UniqueKeyFactory.deviceId();
+            CascadePlatformDTO dto = buildDto(platformId);
+            dto.setClientRefId(clientRefId);
+            Long id = cascadePlatformManager.add(dto);
+
+            CascadePlatformDTO saved = cascadePlatformManager.getById(id);
+            assertEquals(clientId, saved.getLocalClientId());
+            assertEquals("10.0.0.5", saved.getLocalIp());
+            /* 端口不落平台表：永远是 SIP 监听端口（application-test.yml: sip.client.port=5061） */
+            assertEquals(5061, saved.getLocalPort());
+            assertEquals(clientRefId, saved.getClientRefId());
+        }
+
+        @Test
+        @DisplayName("改客户端 IP 后既有平台的 localIp 立即跟着变")
+        void should_follow_client_ip_change() {
+            String clientId = UniqueKeyFactory.gbId();
+            CascadeClientDTO client = new CascadeClientDTO();
+            client.setClientId(clientId);
+            client.setClientIp("192.168.118.7");
+            Long clientRefId = cascadeClientManager.add(client);
+
+            String platformId = UniqueKeyFactory.deviceId();
+            CascadePlatformDTO dto = buildDto(platformId);
+            dto.setClientRefId(clientRefId);
+            Long id = cascadePlatformManager.add(dto);
+
+            CascadeClientDTO patch = new CascadeClientDTO();
+            patch.setId(clientRefId);
+            patch.setClientIp("10.0.0.5");
+            assertTrue(cascadeClientManager.update(patch));
+
+            /* 这正是抽取客户端表的目的：不再需要逐条平台重填 */
+            assertEquals("10.0.0.5", cascadePlatformManager.getById(id).getLocalIp());
+        }
+
+        @Test
+        @DisplayName("新增不传 clientRefId 应拒绝")
+        void should_reject_add_without_client_ref() {
+            CascadePlatformDTO dto = buildDto(UniqueKeyFactory.deviceId());
+            dto.setClientRefId(null);
+            assertThrows(IllegalArgumentException.class, () -> cascadePlatformManager.add(dto));
+        }
+
+        @Test
+        @DisplayName("新增引用不存在的客户端应拒绝")
+        void should_reject_add_with_dangling_client_ref() {
+            CascadePlatformDTO dto = buildDto(UniqueKeyFactory.deviceId());
+            dto.setClientRefId(-1L);
+            assertThrows(IllegalArgumentException.class, () -> cascadePlatformManager.add(dto));
+        }
+
+        @Test
+        @DisplayName("更新指向不存在的客户端应拒绝")
+        void should_reject_update_with_dangling_client_ref() {
+            String platformId = UniqueKeyFactory.deviceId();
+            Long id = cascadePlatformManager.add(buildDto(platformId));
+
+            CascadePlatformDTO patch = new CascadePlatformDTO();
+            patch.setId(id);
+            patch.setClientRefId(-1L);
+            assertThrows(IllegalArgumentException.class, () -> cascadePlatformManager.update(patch));
+        }
+
+        @Test
+        @DisplayName("getByLocalClientId 应经客户端表反查出平台")
+        void should_resolve_platform_by_local_client_id() {
+            String clientId = UniqueKeyFactory.gbId();
+            CascadeClientDTO client = new CascadeClientDTO();
+            client.setClientId(clientId);
+            client.setClientIp("192.168.118.7");
+            Long clientRefId = cascadeClientManager.add(client);
+
+            String platformId = UniqueKeyFactory.deviceId();
+            CascadePlatformDTO dto = buildDto(platformId);
+            dto.setClientRefId(clientRefId);
+            cascadePlatformManager.add(dto);
+
+            CascadePlatformDTO resolved = cascadePlatformManager.getByLocalClientId(clientId);
+            assertNotNull(resolved);
+            assertEquals(platformId, resolved.getPlatformId());
+            assertEquals("192.168.118.7", resolved.getLocalIp());
+        }
+
+        @Test
+        @DisplayName("编码不存在时 getByLocalClientId 返回 null")
+        void should_return_null_for_unknown_local_client_id() {
+            assertNull(cascadePlatformManager.getByLocalClientId(UniqueKeyFactory.gbId()));
+        }
+
+        @Test
+        @DisplayName("分页记录的派生字段一并填好")
+        void should_derive_on_page() {
+            String clientId = UniqueKeyFactory.gbId();
+            CascadeClientDTO client = new CascadeClientDTO();
+            client.setClientId(clientId);
+            client.setClientIp("10.0.0.6");
+            Long clientRefId = cascadeClientManager.add(client);
+
+            String keyword = "派生" + System.nanoTime();
+            CascadePlatformDTO dto = buildDto(UniqueKeyFactory.deviceId());
+            dto.setClientRefId(clientRefId);
+            dto.setPlatformName(keyword);
+            cascadePlatformManager.add(dto);
+
+            CascadePlatformDTO query = new CascadePlatformDTO();
+            query.setPlatformName(keyword);
+            CascadePlatformDTO row = cascadePlatformManager.getPage(query, 1, 10).getRecords().get(0);
+            assertEquals(clientId, row.getLocalClientId());
+            assertEquals("10.0.0.6", row.getLocalIp());
+            assertEquals(5061, row.getLocalPort());
         }
     }
 }

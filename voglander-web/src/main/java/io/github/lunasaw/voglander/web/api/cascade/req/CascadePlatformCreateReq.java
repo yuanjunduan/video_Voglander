@@ -79,24 +79,13 @@ public class CascadePlatformCreateReq implements Serializable {
     private String  password;
 
     /**
-     * 本端客户端国标 ID（20 位，必填）
+     * 本端客户端主键（必填）：从「本端客户端」里选一条，编码与对外通告 IP 由它提供。
+     *
+     * <p>不再接受逐条手填 localClientId/localIp/localPort：同一本端身份被多个上级复用时，
+     * 逐条手填会慢慢分叉成几份不一致的配置，而界面上看不出哪份才是真的。
      */
-    @NotBlank(message = "本端客户端ID不能为空")
-    @Pattern(regexp = CascadeConstant.GB_ID_REGEX, message = "本端客户端ID必须为 20 位数字")
-    private String  localClientId;
-
-    /**
-     * 本端 IP；留空时后端取 SIP 客户端对外通告地址
-     */
-    @Pattern(regexp = CascadeConstant.IPV4_REGEX, message = "本端IP格式不正确")
-    private String  localIp;
-
-    /**
-     * 本端端口；留空时后端取 SIP 客户端监听端口，必须与 SIP 客户端保持一致
-     */
-    @Min(value = 1, message = "本端端口范围 1-65535")
-    @Max(value = 65535, message = "本端端口范围 1-65535")
-    private Integer localPort;
+    @NotNull(message = "请选择本端客户端")
+    private Long    clientRefId;
 
     /**
      * 保活心跳间隔（秒，默认 60）

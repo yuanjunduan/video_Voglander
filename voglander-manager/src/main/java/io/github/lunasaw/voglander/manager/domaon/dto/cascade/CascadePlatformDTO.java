@@ -20,8 +20,20 @@ public class CascadePlatformDTO {
     private String        platformName;
     private String        username;
     private String        password;
+
+    /** 本端客户端引用（{@code tb_cascade_client.id}）：新增必填，更新时 null=不改 */
+    private Long          clientRefId;
+
+    /*
+     * 以下三个字段不落 tb_cascade_platform，由 Manager 按 clientRefId 从 tb_cascade_client 派生：
+     * localClientId=客户端编码、localIp=客户端通告 IP、localPort=sip.client.port（端口是事实不是选项）。
+     * 保留它们是为了让拼 From 头、打日志等既有消费方零改动；写入路径不读这几个值。
+     */
+    /** 本端平台编码（派生只读） */
     private String        localClientId;
+    /** Contact 头对外通告 IP（派生只读） */
     private String        localIp;
+    /** SIP 监听端口，恒取自 sip.client.port（派生只读） */
     private Integer       localPort;
     private Integer       enabled;
     private Integer       registerStatus;

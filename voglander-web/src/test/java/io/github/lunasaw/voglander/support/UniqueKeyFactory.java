@@ -2,6 +2,7 @@ package io.github.lunasaw.voglander.support;
 
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 测试唯一键生成工厂
@@ -14,6 +15,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class UniqueKeyFactory {
 
     private static final AtomicInteger COUNTER = new AtomicInteger(0);
+
+    /** 20 位国标编码的序号：从当前毫秒低 9 位起跳，避开与库内历史编码撞车的常见区间 */
+    private static final AtomicLong    GB_SEQ  = new AtomicLong(System.currentTimeMillis() % 1_000_000_000L);
 
     private static String generate(String prefix) {
         long timestamp = System.currentTimeMillis();
@@ -45,5 +49,17 @@ public class UniqueKeyFactory {
 
     public static String channelId() {
         return generate("ch");
+    }
+
+    /**
+     * 20 位纯数字国标编码（如本端平台编码）。
+     *
+     * <p>不能用 {@link #deviceId()}：它带前缀与短横线，只能当普通业务键，
+     * 而平台/客户端编码有「20 位 ASCII 数字」的硬约束。
+     *
+     * @return 34 开头、共 20 位的唯一编码
+     */
+    public static String gbId() {
+        return "34" + String.format("%018d", GB_SEQ.incrementAndGet());
     }
 }

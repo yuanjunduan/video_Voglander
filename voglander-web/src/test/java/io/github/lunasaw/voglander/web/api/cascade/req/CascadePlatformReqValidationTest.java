@@ -74,11 +74,11 @@ class CascadePlatformReqValidationTest {
     }
 
     @Test
-    @DisplayName("缺少本端客户端ID时拦截")
-    void create_local_client_id_blank() {
+    @DisplayName("未选本端客户端时拦截")
+    void create_client_ref_missing() {
         CascadePlatformCreateReq req = validCreate();
-        req.setLocalClientId(" ");
-        assertTrue(messages(req).contains("本端客户端ID不能为空"));
+        req.setClientRefId(null);
+        assertTrue(messages(req).contains("请选择本端客户端"));
     }
 
     @Test
@@ -258,10 +258,9 @@ class CascadePlatformReqValidationTest {
     }
 
     @Test
-    @DisplayName("更新时本端客户端ID传空串视为不修改")
-    void update_local_client_id_blank_allowed() {
+    @DisplayName("更新时不传 clientRefId 视为不修改")
+    void update_client_ref_absent_allowed() {
         CascadePlatformUpdateReq req = new CascadePlatformUpdateReq();
-        req.setLocalClientId("");
         assertTrue(violations(req).isEmpty());
     }
 
@@ -272,7 +271,7 @@ class CascadePlatformReqValidationTest {
         req.setPlatformId("34020000002000000001");
         req.setPlatformIp("10.0.0.1");
         req.setPlatformPort(5060);
-        req.setLocalClientId("34020000002000000002");
+        req.setClientRefId(1L);
         return req;
     }
 
