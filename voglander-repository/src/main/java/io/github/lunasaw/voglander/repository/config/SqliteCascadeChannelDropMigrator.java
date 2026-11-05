@@ -26,8 +26,9 @@ import lombok.extern.slf4j.Slf4j;
  * 此时删表就是静默丢配置。这种情况宁可阻断启动交给人工处理，也不猜。
  *
  * <p>必须在 {@link SqliteCascadeChannelPublishMigrator} 之后调用。幂等靠
- * {@code schema_migration_history}，非 SQLite 数据源直接跳过（MySQL/PostgreSQL 由 DBA 执行
- * {@code sql/migration/*}{@code /1.10.2-cascade-channel-drop.sql}）。
+ * {@code schema_migration_history}，非 SQLite 数据源直接跳过（MySQL 由 DBA 执行合并脚本
+ * {@code sql/migration/mysql/1.10.0-upgrade-from-1.0.9.sql}，PostgreSQL 执行
+ * {@code sql/migration/postgresql/1.10.2-cascade-channel-drop.sql}）。
  *
  * @author luna
  */

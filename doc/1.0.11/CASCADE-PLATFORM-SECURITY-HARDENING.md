@@ -111,6 +111,10 @@
 
 存量 `local_port=5070` 的记录需人工确认后再改（脚本内 UPDATE 默认注释掉）。
 
+> **MySQL 注（2026-11）**：MySQL 侧 1.0.10–1.10.5 迁移脚本已合并为单支
+> `sql/migration/mysql/1.10.0-upgrade-from-1.0.9.sql`，上表的 MySQL 行已不存在；
+> PostgreSQL / SQLite 分版本文件仍在。
+
 ---
 
 ## 7. 上线步骤

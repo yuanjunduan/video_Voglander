@@ -43,7 +43,8 @@ import lombok.extern.slf4j.Slf4j;
  * 再往那支里加逻辑，那些库永远补不上本列。一次演进一个 key、一个事务。
  *
  * <p>建表脚本的权威源仍是 {@code sql/voglander-sqlite.sql}；非 SQLite 数据源直接跳过，
- * MySQL/PostgreSQL 由 DBA 执行 {@code sql/migration/*}{@code /1.10.2-cascade-publish-object-key.sql}。
+ * MySQL 由 DBA 执行合并脚本 {@code sql/migration/mysql/1.10.0-upgrade-from-1.0.9.sql}，
+ * PostgreSQL 执行 {@code sql/migration/postgresql/1.10.2-cascade-publish-object-key.sql}。
  *
  * @author luna
  */

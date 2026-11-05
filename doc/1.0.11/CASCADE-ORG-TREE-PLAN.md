@@ -262,6 +262,10 @@ CREATE INDEX idx_cascade_channel_org ON tb_cascade_channel (platform_id, cascade
 
 ### 5.3 SQL 维护点（三个方言 + 三份 migration，缺一不可）
 
+> **MySQL 注（2026-11）**：MySQL 侧的 1.0.10–1.10.5 迁移脚本已合并为单支
+> `sql/migration/mysql/1.10.0-upgrade-from-1.0.9.sql`，下表的 MySQL 行已不存在；
+> 「tree 必须先于 path」的顺序坑已在合并脚本内固定为拓扑序。PostgreSQL / SQLite 分版本文件仍在。
+
 | 文件 | 改动 |
 |---|---|
 | `sql/voglander.sql` | 新增 `tb_cascade_org` DDL（含 `org_path`）；`tb_cascade_channel` 加列（L768 附近） |

@@ -54,7 +54,8 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p>幂等靠 {@code schema_migration_history} 的迁移键，一次演进一个 key、一个事务。
  * 建表脚本的权威源仍是 {@code sql/voglander-sqlite.sql}；非 SQLite 数据源直接跳过，
- * MySQL/PostgreSQL 由 DBA 执行 {@code sql/migration/*}{@code /1.10.2-cascade-channel-into-publish.sql}。
+ * MySQL 由 DBA 执行合并脚本 {@code sql/migration/mysql/1.10.0-upgrade-from-1.0.9.sql}，
+ * PostgreSQL 执行 {@code sql/migration/postgresql/1.10.2-cascade-channel-into-publish.sql}。
  *
  * @author luna
  */
