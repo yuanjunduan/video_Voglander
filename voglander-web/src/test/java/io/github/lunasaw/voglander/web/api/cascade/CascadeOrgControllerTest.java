@@ -2,7 +2,11 @@ package io.github.lunasaw.voglander.web.api.cascade;
 
 import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -30,6 +34,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
 import io.github.lunasaw.voglander.manager.code.CascadeCodeReapplyResult;
+import io.github.lunasaw.voglander.manager.code.CascadeCodeResolver;
 import io.github.lunasaw.voglander.manager.code.CascadeCodeRuleService;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeBlockedOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
@@ -37,6 +42,7 @@ import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrg
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeRevokePreviewDTO;
 import io.github.lunasaw.voglander.manager.manager.CascadeOrgManager;
+import io.github.lunasaw.voglander.manager.manager.CascadePublishManager;
 import io.github.lunasaw.voglander.web.api.cascade.assembler.CascadeWebAssembler;
 import io.github.lunasaw.voglander.web.api.cascade.support.CascadeDeliveryGate;
 
@@ -65,6 +71,10 @@ class CascadeOrgControllerTest {
     CascadeDeliveryGate   cascadeDeliveryGate;
     @Mock
     CascadeCodeRuleService cascadeCodeRuleService;
+    @Mock
+    CascadePublishManager cascadePublishManager;
+    @Mock
+    CascadeCodeResolver cascadeCodeResolver;
     @Spy
     CascadeWebAssembler   cascadeWebAssembler = new CascadeWebAssembler();
 
@@ -201,6 +211,73 @@ class CascadeOrgControllerTest {
             .andExpect(jsonPath("$.data.items[0].orgName").value("可停用"))
             .andExpect(jsonPath("$.data.items[1].ok").value(false))
             .andExpect(jsonPath("$.data.items[1].message").value("组织不存在: id=2"));
+    }
+
+    @Test
+    @DisplayName("批量推送：祖先自动补入被标记，单条被祖先链拦下不影响其余")
+    void publishBatch_should_mark_ancestors_and_isolate_failures() throws Exception {
+        CascadeOrgDTO root = new CascadeOrgDTO();
+        root.setId(1L);
+        root.setOrgName("一层");
+        root.setOrgCode("34020000002150000001");
+        CascadeOrgDTO leaf = new CascadeOrgDTO();
+        leaf.setId(2L);
+        leaf.setOrgName("二层");
+        leaf.setOrgCode("34020000002150000002");
+
+        /* 只勾了叶子，祖先由 manager 展开补进来 */
+        when(cascadeOrgManager.expandPublishTargets(List.of(2L), true)).thenReturn(List.of(root, leaf));
+        when(cascadeOrgManager.getById(1L)).thenReturn(root);
+        when(cascadeOrgManager.getById(2L)).thenReturn(leaf);
+        /* 同一个方法在一批里被调多次（每条目标一次），只能按入参分流：
+           祖先自身通过，叶子被祖先链拦下，正好验证「祖先先执行、子级才可能成功」的顺序约束 */
+        doAnswer(invocation -> {
+            if (Long.valueOf(2L).equals(invocation.getArgument(0))) {
+                throw new IllegalArgumentException("平台 PF1：上级组织【一层】处于停用状态，启用后才能推送其下级");
+            }
+            return null;
+        }).when(cascadeOrgManager).assertAncestorsPublished(anyLong(), anyList());
+
+        mvc.perform(post("/api/v1/cascade/org/publish/batch")
+            .contentType(MediaType.APPLICATION_JSON).content("{\"ids\":[2],\"platformIds\":[\"PF1\"]}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.total").value(2))
+            .andExpect(jsonPath("$.data.ancestorsAdded").value(1))
+            .andExpect(jsonPath("$.data.succeeded").value(1))
+            .andExpect(jsonPath("$.data.failed").value(1))
+            /* 先执行的是补入的祖先：不标出来用户会以为自己误勾了一级 */
+            .andExpect(jsonPath("$.data.items[0].id").value(1))
+            .andExpect(jsonPath("$.data.items[0].ancestor").value(true))
+            .andExpect(jsonPath("$.data.items[0].ok").value(true))
+            .andExpect(jsonPath("$.data.items[1].id").value(2))
+            .andExpect(jsonPath("$.data.items[1].ancestor").value(false))
+            .andExpect(jsonPath("$.data.items[1].ok").value(false))
+            .andExpect(jsonPath("$.data.items[1].message")
+                .value("平台 PF1：上级组织【一层】处于停用状态，启用后才能推送其下级"));
+    }
+
+    @Test
+    @DisplayName("批量推送：includeAncestors=false 原样传给 manager，不替用户扩大范围")
+    void publishBatch_should_respect_include_ancestors_flag() throws Exception {
+        CascadeOrgDTO leaf = new CascadeOrgDTO();
+        leaf.setId(3L);
+        leaf.setOrgName("三层");
+        leaf.setOrgCode("34020000002150000003");
+        when(cascadeOrgManager.expandPublishTargets(List.of(3L), false)).thenReturn(List.of(leaf));
+        when(cascadeOrgManager.getById(3L)).thenReturn(leaf);
+
+        mvc.perform(post("/api/v1/cascade/org/publish/batch")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"ids\":[3],\"platformIds\":[\"PF1\"],\"includeAncestors\":false}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.total").value(1))
+            .andExpect(jsonPath("$.data.ancestorsAdded").value(0))
+            .andExpect(jsonPath("$.data.items[0].ancestor").value(false));
+
+        verify(cascadeOrgManager).expandPublishTargets(List.of(3L), false);
+        /* 不补祖先时仍走同一条落地链路：校验、写行、发号一个都不能少 */
+        verify(cascadeOrgManager).assertAncestorsPublished(eq(3L), anyList());
+        verify(cascadePublishManager).configurePlatforms(eq("ORG"), eq("34020000002150000003"), anyList());
     }
 
     @Test

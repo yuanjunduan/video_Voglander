@@ -1007,6 +1007,68 @@ class CascadeOrgManagerTest extends BaseTest {
     }
 
     @Nested
+    @DisplayName("expandPublishTargets - 批量推送的执行目标")
+    class ExpandPublishTargets {
+
+        @Test
+        @DisplayName("只勾叶子时把祖先补进来，并按层级由浅到深排列")
+        void should_include_ancestors_in_depth_order() {
+            Long rootId = cascadeOrgManager.add(org(null, "一层"));
+            Long midId = cascadeOrgManager.add(org(rootId, "二层"));
+            Long leafId = cascadeOrgManager.add(org(midId, "三层"));
+
+            List<CascadeOrgDTO> targets = cascadeOrgManager.expandPublishTargets(List.of(leafId), true);
+
+            /* 顺序即执行顺序：父级没先写发布行，子级会被祖先链校验判成「祖先未推送」 */
+            assertEquals(List.of(rootId, midId, leafId),
+                targets.stream().map(CascadeOrgDTO::getId).toList());
+        }
+
+        @Test
+        @DisplayName("关掉补祖先时只返回勾选的组织，不替用户扩大推送范围")
+        void should_not_expand_when_disabled() {
+            Long rootId = cascadeOrgManager.add(org(null, "一层"));
+            Long midId = cascadeOrgManager.add(org(rootId, "二层"));
+            Long leafId = cascadeOrgManager.add(org(midId, "三层"));
+
+            List<CascadeOrgDTO> targets = cascadeOrgManager.expandPublishTargets(List.of(leafId), false);
+
+            assertEquals(List.of(leafId), targets.stream().map(CascadeOrgDTO::getId).toList());
+        }
+
+        @Test
+        @DisplayName("勾父又勾子时去重，同一组织只执行一次")
+        void should_deduplicate_parent_and_child() {
+            Long rootId = cascadeOrgManager.add(org(null, "一层"));
+            Long childId = cascadeOrgManager.add(org(rootId, "二层"));
+
+            List<CascadeOrgDTO> targets = cascadeOrgManager.expandPublishTargets(List.of(childId, rootId), true);
+
+            assertEquals(2, targets.size());
+            assertEquals(List.of(rootId, childId), targets.stream().map(CascadeOrgDTO::getId).toList());
+        }
+
+        @Test
+        @DisplayName("勾一个组织不连带它的子孙：推整棵子树是另一个决定")
+        void should_not_expand_descendants() {
+            Long rootId = cascadeOrgManager.add(org(null, "一层"));
+            Long childId = cascadeOrgManager.add(org(rootId, "二层"));
+
+            List<CascadeOrgDTO> targets = cascadeOrgManager.expandPublishTargets(List.of(rootId), true);
+
+            assertEquals(List.of(rootId), targets.stream().map(CascadeOrgDTO::getId).toList(),
+                "子孙不应被自动带入: " + childId);
+        }
+
+        @Test
+        @DisplayName("id 不存在时直接抛错，不返回一份悄悄缩水的目标清单")
+        void should_reject_unknown_id() {
+            assertThrows(IllegalArgumentException.class,
+                () -> cascadeOrgManager.expandPublishTargets(List.of(-1L), true));
+        }
+    }
+
+    @Nested
     @DisplayName("resolveParentCode - 本地视角的 ParentID")
     class ResolveParentCode {
 

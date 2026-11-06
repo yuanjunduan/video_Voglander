@@ -504,6 +504,87 @@ public class CascadeOrgManager {
     }
 
     /**
+     * 批量发布的执行目标：勾选的组织 ∪ 其祖先，按<b>层级由浅到深</b>排出。
+     *
+     * <p><b>为什么要补祖先</b>：发布是逐个对象配的，用户完全可以只勾一批叶子组织。
+     * 叶子在上级目录里立不起来（{@code ParentID} 指向一个上级没有的节点），组装器会静默剔除，
+     * 而报文层没有任何报错——页面显示「推送中」，上级一条都收不到。批量入口一次补齐祖先，
+     * 比让用户逐个往上点更不容易漏；不想连带推祖先时把 {@code includeAncestors} 置为 false。
+     *
+     * <p><b>为什么要按深度排序</b>：{@link #assertAncestorsPublished} 读的是库里的现状，父级还没
+     * 写发布行时子级会被判成「祖先未推送」直接失败。浅的先执行，同一批里天然满足依赖，
+     * 不必为此放松校验（放松后单个组织又能推出去立不起来的节点）。
+     *
+     * <p>祖先闭包只往上走纯父链，<b>不</b>展开子孙：勾一个组织不等于勾它下面全部子组织，
+     * 那是「推整棵子树」的另一个决定，用户没表达过就不替他做。
+     *
+     * @param ids              勾选的组织主键
+     * @param includeAncestors 是否把祖先一并纳入（父链上逐级补全）
+     * @return 执行目标；{@code ids} 为空返回空列表。不在库里的 id 直接抛错（此时尚未写入任何数据，
+     *         整批拒绝比悄悄跳过更容易发现前端传错）
+     */
+    public List<CascadeOrgDTO> expandPublishTargets(List<Long> ids, boolean includeAncestors) {
+        if (ids == null || ids.isEmpty()) {
+            return new ArrayList<>();
+        }
+        Map<Long, CascadeOrgDTO> byId = indexById(listAll());
+        Set<Long> wanted = new LinkedHashSet<>();
+        for (Long id : ids) {
+            if (id == null) {
+                continue;
+            }
+            CascadeOrgDTO org = byId.get(id);
+            Assert.notNull(org, "级联组织不存在: id=" + id);
+            wanted.add(id);
+            if (!includeAncestors) {
+                continue;
+            }
+            Set<Long> guard = new HashSet<>();
+            Long cursor = org.getParentId();
+            while (cursor != null && guard.add(cursor)) {
+                CascadeOrgDTO parent = byId.get(cursor);
+                if (parent == null) {
+                    break;
+                }
+                wanted.add(parent.getId());
+                cursor = parent.getParentId();
+            }
+        }
+        List<CascadeOrgDTO> targets = new ArrayList<>();
+        for (Long id : wanted) {
+            CascadeOrgDTO org = byId.get(id);
+            if (org != null) {
+                targets.add(org);
+            }
+        }
+        targets.sort(Comparator.comparingInt((CascadeOrgDTO o) -> depthOf(o, byId))
+            .thenComparing(o -> o.getSortOrder() == null ? 0 : o.getSortOrder())
+            .thenComparing(o -> o.getId() == null ? 0L : o.getId()));
+        return targets;
+    }
+
+    /**
+     * 组织深度 = 祖先个数（根为 0）。
+     *
+     * <p>走 {@code parent_id} 链而不是数 {@code orgPath} 的分隔符：路径是历史数据，
+     * 早期记录可能没回填过，数出来会整层偏移；父链缺失时最多退化成「同层」，顺序仍稳定。
+     */
+    private int depthOf(CascadeOrgDTO org, Map<Long, CascadeOrgDTO> byId) {
+        int depth = 0;
+        Set<Long> guard = new HashSet<>();
+        Long cursor = org.getParentId();
+        while (cursor != null && guard.add(cursor)) {
+            CascadeOrgDTO parent = byId.get(cursor);
+            if (parent == null) {
+                break;
+            }
+            depth++;
+            cursor = parent.getParentId();
+        }
+        return depth;
+    }
+
+    /**
      * 停用影响面预览：算出这次会把哪些节点从上级目录里摘掉、涉及哪些平台。
      *
      * <p>只做计算，不落库不发报文——用户在确认框里看到数量才决定要不要执行。

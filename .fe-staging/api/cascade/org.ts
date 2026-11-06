@@ -229,6 +229,47 @@ export namespace CascadeOrgApi {
     items: RevokeBatchItem[];
   }
 
+  /**
+   * 批量推送请求：一批组织 × 一批上级平台。
+   *
+   * 与 `OrgPublishReq` 的区别：那个是「一个组织配哪些平台，逐平台带编码/名称/策略覆盖」，
+   * 这里是「一批组织一起推」，**不带覆盖**——批量只决定推不推，覆盖值回单条发布抽屉里改。
+   */
+  export interface OrgPublishBatchReq {
+    ids: number[];
+    platformIds: string[];
+    /**
+     * 是否把祖先一并推上去，不传按 true。
+     *
+     * 默认开：只勾叶子时它在上级目录里立不起来（父节点上级没有），
+     * 组装器会静默剔除，页面「已推送」而上级一条收不到。
+     */
+    includeAncestors?: boolean;
+  }
+
+  /** 批量推送的单条结果。 */
+  export interface OrgPublishBatchItem {
+    id?: number;
+    orgName?: string;
+    orgCode?: string;
+    /** 是否为「为了让它立起来而自动补推的祖先」，不是你勾的 */
+    ancestor?: boolean;
+    ok?: boolean;
+    /** 失败原因；成功时为空 */
+    message?: string;
+  }
+
+  /** 批量推送结果（逐条隔离，按层级由浅到深执行）。 */
+  export interface OrgPublishBatchResp {
+    /** 实际执行的组织数（含自动补入的祖先） */
+    total: number;
+    succeeded: number;
+    failed: number;
+    /** 其中自动补推的祖先数 */
+    ancestorsAdded: number;
+    items: OrgPublishBatchItem[];
+  }
+
   /** 单个对象的编码变更。 */
   export interface CodeReapplyChange {
     /** ORG / DEVICE / CHANNEL，与发布行 object_type 同口径 */
@@ -479,6 +520,23 @@ export async function configureCascadeOrgPublish(
 ) {
   return requestClient.put<CascadeOrgApi.OrgPublishVO[]>(
     `/api/v1/cascade/org/${id}/publish`,
+    data,
+  );
+}
+
+/**
+ * 批量推送组织到一组上级平台。
+ *
+ * 按层级从浅到深逐条执行、单条失败不中断整批；默认自动补齐祖先——只勾叶子组织时它在
+ * 上级目录里立不起来，而报文层不会报错，页面会显示「已推送」但上级一条都收不到。
+ *
+ * 不带编码/名称覆盖：批量只决定「推不推」，逐平台覆盖值请用单条发布抽屉维护。
+ */
+export async function configureCascadeOrgPublishBatch(
+  data: CascadeOrgApi.OrgPublishBatchReq,
+) {
+  return requestClient.post<CascadeOrgApi.OrgPublishBatchResp>(
+    '/api/v1/cascade/org/publish/batch',
     data,
   );
 }

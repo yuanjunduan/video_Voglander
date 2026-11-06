@@ -26,6 +26,7 @@ import {
   invalidateCascadeOrgTree,
 } from '../shared/use-cascade-org';
 import { useOrgColumns } from './data';
+import BatchPublishForm from './modules/batch-publish-form.vue';
 import CodeReapplyModal from './modules/code-reapply-modal.vue';
 import Form from './modules/form.vue';
 import MoveModal from './modules/move-modal.vue';
@@ -69,6 +70,11 @@ const [FormDrawer, formDrawerApi] = useVbenDrawer({
 
 const [PublishDrawerComp, publishDrawerApi] = useVbenDrawer({
   connectedComponent: PublishDrawer,
+  destroyOnClose: true,
+});
+
+const [BatchPublishDrawerComp, batchPublishDrawerApi] = useVbenDrawer({
+  connectedComponent: BatchPublishForm,
   destroyOnClose: true,
 });
 
@@ -343,6 +349,27 @@ function onBatchRevoke() {
   openRevoke(rows);
 }
 
+/**
+ * 批量推送：把勾选的组织一次推到选中的上级平台。
+ *
+ * 不在这里做「祖先要不要一起推」的判断——那属于用户意图，交给抽屉里的开关表达。
+ * 这里只把勾选行原样带过去，让抽屉能列出「你选了哪些」。
+ */
+function onBatchPublish() {
+  if (!hasAccessByCodes(['Cascade:Org:Edit'])) {
+    message.error($t('device.msg.noPermission'));
+    return;
+  }
+  const rows =
+    (gridApi.grid?.getCheckboxRecords?.() as CascadeOrgApi.CascadeOrgVO[]) ??
+    [];
+  if (rows.length === 0) {
+    message.warning($t('cascade.org.batchPublish.orgsRequired'));
+    return;
+  }
+  batchPublishDrawerApi.setData({ orgs: rows }).open();
+}
+
 async function onRevokeSuccess() {
   invalidateCascadeOrgTree();
   await gridApi.query();
@@ -421,6 +448,7 @@ function goPlatform() {
   >
     <FormDrawer @success="onRefresh" />
     <PublishDrawerComp @success="onRefresh" />
+    <BatchPublishDrawerComp @success="onRefresh" />
     <RevokeModalComp @success="onRevokeSuccess" />
     <MoveModalComp @success="onMoveSuccess" />
     <CodeReapplyModalComp @success="onCodeReapplySuccess" />
@@ -477,6 +505,9 @@ function goPlatform() {
             </Button>
             <Button @click="onBatchRevoke">
               {{ $t('cascade.org.revoke.batchAction') }}
+            </Button>
+            <Button @click="onBatchPublish">
+              {{ $t('cascade.org.batchPublish.action') }}
             </Button>
           </Space>
         </template>

@@ -156,6 +156,22 @@ mvn test -pl voglander-web -am "-Dtest=Cascade*Test" "-Dsurefire.failIfNoSpecifi
 - 菜单：页面 `605` + 按钮 `60501`–`60504`（三份初始化 SQL 同步）。
   **`604` 已被 1.0.13 的「级联运行状态」页占用**，新增菜单前先在三份 SQL 里 grep 主键确认空闲段。
 
+### 4.7 批量发布（通道 / 组织）两个入口
+
+| 入口 | 请求体 | 语义 |
+| --- | --- | --- |
+| `POST /cascade/channel/batchPublish` | `{platformIds[], channels[]}` **或** `{platformIds[], orgId, includeChildren}` | 二选一。带 `channels` 逐条推；带 `orgId` 走「整组织」——后端按组织算设备集合再取通道（= 坑位 #26 的链路） |
+| `POST /cascade/org/publish/batch` | `{ids[], platformIds[], includeAncestors?=true}` | 一次推多个组织，逐条隔离（单条失败不影响其它） |
+
+组织批量的执行规则（`CascadeOrgManager#expandPublishTargets` + `CascadeOrgController#publishBatch`）：
+
+- **祖先闭包只向上、不向下**：从 `ids` 沿 `parent_id` 链补齐所有祖先（含"祖先的祖先"），**不展开被选组织的子孙**。
+- **按层级由浅到深执行**：深度用 `parent_id` 链现算后升序排序，**不用 `org_path`**——历史数据整层未回填时 org_path 会整体偏移，链算才可靠。父级先立起来，子级才可能出现在上级目录里。
+- **批量入口传 `req = null`**：不写 `publish_code` / 名称覆盖，避免把人工改过的编码抹成本地值；要覆盖只能走单条发布。
+- 单条执行顺序不变，仍是 `assertAncestorsPublished`（**必须早于写发布行**）→ `configurePlatforms` → `applyRevokePolicies` / `applyCodeOverrides` → `resolveAll` → 回读 `listByObject`。
+- 出参 `{total, succeeded, failed, ancestorsAdded, items[{id, orgName, orgCode, ancestor, ok, message}]}`；`ancestor=true` 表示这条是自动补推的祖先，前端加「自动补推」标签并**失败优先排序**。
+- 未知 id 在**执行前**就抛错（`Assert`），不会出现"推了一半发现 id 是错的"。
+
 ---
 
 ## 5. 媒体 / 直播链路
@@ -293,6 +309,8 @@ Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
 | 26 | 「把这个组织下的通道全推上去」后，上级只看到组织、一个通道都没有 | 通道节点只认自己那行 `tb_cascade_publish(object_type=CHANNEL, object_key=deviceId:channelId)`，**组织发布（`PublishObjectType.ORG`）不会带出通道**。所以「按组织推通道」本质是：`orgId` → `DeviceManager#listDeviceIdsByOrgScope` 得设备集合（见 #24/#25）→ `DeviceChannelManager#listByDeviceIds` → 逐条走 `CascadeChannelManager#add`（发号 `resolve`+`fillCodeIfBlank` + 组织可见性校验）。直接插发布行或只发布组织，上级点播/PTZ/录像都反查不到本地通道 |
 | 27 | 脚本里 `dispatchEvent(new MouseEvent('click'))` 点表格勾选框毫无反应 | vxe-table 行勾选走 `isTrusted` 判断，程序化事件被直接丢弃（不报错、不变化，最难查）。必须用 CDP `Input.dispatchMouseEvent` 真实点击，且 `mouseMoved` 要带 `button:'none'`、`pointerType:'mouse'`，否则事件同样不落地。复用 `logs/_verify/cdp-click2.ps1`（坐标一律取 `getBoundingClientRect()` 的中心，vxe 同一行在 main/固定列/隐藏副本里各有一份 DOM，只点可见那份） |
 | 28 | 在浏览器里手写 `fetch('/api/v1/...')` 取数，后端回 `{"code":500,"msg":"No static resource v1/..."}` | 前端叠了三层前缀：`requestClient` 的 baseURL 是 `/api`，`src/api/*` 里的函数又写全 `/api/v1/...`，vite proxy 再把**首个** `/api` 剥掉。∴ 真实请求是 `/api/api/v1/...`，后端最终收到 `/api/v1/...`。浏览器里临时取数（CDP 脚本）必须写成 `/api/api/v1/...`；拼错时后端只回 `No static resource`（不是 404），容易误判成接口不存在 |
+| 29 | 重启后端后 `spring-boot:run` 报 `The POM for ... is missing` / `Could not find artifact`，但 `mvn install` 明明成功 | 启动命令带了 `-s settings.xml`。项目根的 `settings.xml` **只有 mirror、没有 `localRepository`**，`-s` 会顶掉用户级 settings（其 `localRepository=D:\work\m2\repository`），依赖解析落到空的 `~/.m2`。**不要传 `-s`**；若确要指定仓库，先把 `localRepository` 补进项目 settings |
+| 30 | 抽屉跑着跑着自己关了 / CDP 调试端口过一会儿消失 | 两件事：vben 的 `useVbenDrawer` 监听 **Escape**，脚本里按 Esc 想"收起下拉"会把整个抽屉关掉——改用点「确认」或点空白处；`Start-Process` 起的 Chrome 会随父 shell 会话回收（脚本内还能用、脚本一结束就死），必须 `([wmiclass]'Win32_Process').Create($cmd)` 脱离父进程（见 `logs/_verify/launch-cdp3.ps1`） |
 
 ---
 
@@ -322,6 +340,17 @@ Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
 - 工作区两个 `test-app.db` 已手工改成菜单 605（若重建库则自动带）；线上 MySQL 需执行
   `sql/migration/mysql/1.10.0-upgrade-from-1.0.9.sql`，PostgreSQL 执行
   `sql/migration/postgresql/1.10.5-cascade-client.sql`。
+- **两处批量推送（2026-11-06 本地实例已闭环验证，后端 8181 由 `logs/_verify/run-backend.ps1` 重启）**：
+  - 通道页「批量推送」抽屉：左组织树 228×420 + 右侧通道多选 294px，8 个通道选项。树联动实测
+    全部资产 8 / 测试的根节点（含下级）8 / 仅本级 0 / 测试章丘市 0 / 未归组织 0；「全选本组织」= 8 路，
+    摘要「已选 8 路通道」。payload 实测二选一正确：勾选模式带 8 条 `channels` 无 `orgId`；
+    整组织模式带 `orgId:3` + `includeChildren:true` 无 `channels`。
+  - 组织页「批量推送」抽屉：只勾「测试济南市」+ 自动补推上级开 → 真实返回
+    「目标 2 个组织（其中自动补推祖先 1 个）：成功 2，失败 0」，条目为「测试的根节点 [自动补推]」
+    「测试济南市」；关闭后表格刷新，该行「已推送平台」出现 37000020002000000100、删除按钮变灰
+    （有 8 路直属通道）。**注意这是对本地库的真实写入，测试组织已留下发布行。**
+  - 门禁：`vue-tsc --noEmit --skipLibCheck` 无输出、`eslint` 无输出、中英 `cascade.json` 各 431 键对齐。
+  - 前端「勾选父组织会级联选中整棵子树」是 vxe 默认行为，第一次勾两个根得到 6 个组织，别误判成 bug。
 
 ---
 

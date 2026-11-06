@@ -1,11 +1,14 @@
 package io.github.lunasaw.voglander.web.api.cascade;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.util.Assert;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -30,9 +33,11 @@ import io.github.lunasaw.voglander.manager.manager.CascadePublishManager;
 import io.github.lunasaw.voglander.web.api.cascade.assembler.CascadeWebAssembler;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeOrgCreateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeOrgMoveReq;
+import io.github.lunasaw.voglander.web.api.cascade.req.CascadeOrgPublishBatchReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeOrgPublishReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeOrgUpdateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeRevokeBatchReq;
+import io.github.lunasaw.voglander.web.api.cascade.resp.CascadeOrgPublishBatchResp;
 import io.github.lunasaw.voglander.web.api.cascade.resp.CascadeRevokeBatchResp;
 import io.github.lunasaw.voglander.web.api.cascade.support.CascadeDeliveryGate;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeOrgVO;
@@ -41,6 +46,7 @@ import io.github.lunasaw.voglander.web.api.cascade.vo.CascadePublishVO;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeRevokePreviewVO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 级联组织树管理 API。
@@ -67,6 +73,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 @RestController
 @RequestMapping(ApiConstant.API_INDEX_V1 + "/cascade/org")
 @Tag(name = "级联组织管理", description = "本地组织树 CRUD + 树形查询 + 发布范围配置")
+@Slf4j
 public class CascadeOrgController {
 
     @Autowired
@@ -340,13 +347,93 @@ public class CascadeOrgController {
         description = "platformIds 为本次要发布的平台；未勾选的平台置为停用但保留编码覆盖；祖先未发布时拒绝")
     public AjaxResult<List<CascadePublishVO>> configurePublish(@PathVariable Long id,
         @RequestBody(required = false) CascadeOrgPublishReq req) {
+        List<String> platformIds = req == null || req.getPlatformIds() == null
+            ? List.of() : req.getPlatformIds();
+        CascadeOrgDTO org = applyPublishScope(id, platformIds, req);
+        /* 回读整份配置：前端拿到的是落库后的真实值（含未勾选但保留覆盖的行） */
+        return AjaxResult.success(cascadeWebAssembler.toPublishVOList(
+            cascadePublishManager.listByObject(PublishObjectType.ORG.name(), org.getOrgCode())));
+    }
+
+    /**
+     * 批量推送：把一批组织一次推到同一组上级平台。
+     *
+     * <p><b>为什么必须有批量入口</b>：逐个组织点「推送配置」是一屏填不完的活，而级联上线往往
+     * 是整棵树一起推；更麻烦的是漏推一级的后果不报错——子组织在上级目录里立不起来，组装器静默剔除，
+     * 页面显示「推送中」而上级一条收不到。批量入口按层级从浅到深执行，并默认把祖先补进来。
+     *
+     * <p><b>逐条隔离</b>：与 {@code /disable/batch} 同口径，单条失败不中断整批。一条组织失败
+     * 不回滚其他组织已经推上去的配置——回滚要发 DEL，而 DEL 是单向的，回滚失败会留下两边错位，
+     * 比让用户按 {message} 精确重试更糟。
+     *
+     * <p><b>不带编码/名称覆盖与通道策略</b>：批量只决定「推不推」。覆盖值留在单条抽屉里改，
+     * 否则这里传空即等于把用户填过的 publish_code 抹成本地值。
+     */
+    @PostMapping("/publish/batch")
+    @Operation(summary = "批量配置组织发布范围",
+        description = "按层级从浅到深逐条执行；includeAncestors 默认 true 自动补推祖先；单条失败不中断整批")
+    public AjaxResult<CascadeOrgPublishBatchResp> configurePublishBatch(
+        @RequestBody(required = false) CascadeOrgPublishBatchReq req) {
+        List<Long> ids = req == null || req.getIds() == null ? List.of() : req.getIds();
+        List<String> platformIds = req == null || req.getPlatformIds() == null
+            ? List.of() : req.getPlatformIds();
+        /* 空集合不当作「取消全部发布」：批量入口的语义是推送，取消请走 /disable/batch 或单条抽屉，
+           两种意图共用一个空入参只会让误点变成静默下线 */
+        Assert.isTrue(!ids.isEmpty(), "请选择要推送的组织");
+        Assert.isTrue(!platformIds.isEmpty(), "请选择目标上级平台");
+        boolean includeAncestors = req.getIncludeAncestors() == null || req.getIncludeAncestors();
+        /* 展开在任何写入之前完成：id 不存在时整批拒绝，不会留下推了一半的中间态 */
+        List<CascadeOrgDTO> targets = cascadeOrgManager.expandPublishTargets(ids, includeAncestors);
+        Set<Long> requested = new LinkedHashSet<>(ids);
+
+        CascadeOrgPublishBatchResp resp = new CascadeOrgPublishBatchResp();
+        resp.setTotal(targets.size());
+        resp.setAncestorsAdded((int) targets.stream()
+            .filter(org -> !requested.contains(org.getId())).count());
+        int succeeded = 0;
+        for (CascadeOrgDTO org : targets) {
+            CascadeOrgPublishBatchResp.Item item = new CascadeOrgPublishBatchResp.Item();
+            item.setId(org.getId());
+            item.setOrgName(org.getOrgName());
+            item.setOrgCode(org.getOrgCode());
+            item.setAncestor(!requested.contains(org.getId()));
+            try {
+                /* req 传 null：批量入口不支持覆盖，走同一条落地链路但不写覆盖值 */
+                applyPublishScope(org.getId(), platformIds, null);
+                item.setOk(true);
+                succeeded++;
+            } catch (RuntimeException e) {
+                /* 单条失败不中断整批：已推上去的组织保持原状，结果如实回传便于精确重试 */
+                item.setOk(false);
+                item.setMessage(e.getMessage());
+            }
+            resp.getItems().add(item);
+        }
+        resp.setSucceeded(succeeded);
+        resp.setFailed(targets.size() - succeeded);
+        log.info("批量推送组织完成: 目标={}, 成功={}, 失败={}, 自动补祖先={}, platformIds={}",
+            resp.getTotal(), resp.getSucceeded(), resp.getFailed(), resp.getAncestorsAdded(), platformIds);
+        return AjaxResult.success(resp);
+    }
+
+    /**
+     * 单条发布范围落地的唯一实现——单条与批量共用，避免两条入口的时序分叉。
+     *
+     * <p>顺序是硬约束：<b>校验祖先链 → 写发布行 → 写覆盖 → 发号</b>。
+     * <ul>
+     *   <li>校验放最前：先写再报错会让页面回读到「已勾选但上级看不到」的半成品；</li>
+     *   <li>发号放最后：{@code applyCodeOverrides} 写的就是 {@code publish_code}，先算后覆盖会把
+     *       AUTO 标记落到人工值上；反过来，已填的覆盖码会被 resolve 原样返回，不会再被规则改写。</li>
+     * </ul>
+     *
+     * @param req 单条入口的覆盖配置；批量入口传 {@code null}
+     * @return 落地的组织（调用方回读发布行时要用它的 orgCode）
+     */
+    private CascadeOrgDTO applyPublishScope(Long id, List<String> platformIds, CascadeOrgPublishReq req) {
         CascadeOrgDTO org = cascadeOrgManager.getById(id);
         if (org == null) {
             throw new IllegalArgumentException("级联组织不存在: id=" + id);
         }
-        List<String> platformIds = req == null || req.getPlatformIds() == null
-            ? List.of() : req.getPlatformIds();
-        /* 必须在写发布行之前：先写再报错会让页面回读到「已勾选但上级看不到」的半成品 */
         cascadeOrgManager.assertAncestorsPublished(id, platformIds);
         cascadePublishManager.configurePlatforms(PublishObjectType.ORG.name(), org.getOrgCode(), platformIds);
 
@@ -355,12 +442,8 @@ public class CascadeOrgController {
             applyCodeOverrides(org.getOrgCode(), platformIds, req.getPublishCodeByPlatform(),
                 req.getPublishNameByPlatform());
         }
-        /* 生成必须排在 override 之后：applyCodeOverrides 写的就是 publish_code，先算后覆盖会把
-           AUTO 标记落到人工值上；反过来，已填的覆盖码会被 resolve 原样返回，不会再被规则改写 */
         cascadeCodeResolver.resolveAll(PublishObjectType.ORG.name(), org.getOrgCode(), platformIds);
-        /* 回读整份配置：前端拿到的是落库后的真实值（含未勾选但保留覆盖的行） */
-        return AjaxResult.success(cascadeWebAssembler.toPublishVOList(
-            cascadePublishManager.listByObject(PublishObjectType.ORG.name(), org.getOrgCode())));
+        return org;
     }
 
     /** 逐平台下发通道处置策略；只处理本次勾选的平台，避免顺手改掉已停用行的策略。 */

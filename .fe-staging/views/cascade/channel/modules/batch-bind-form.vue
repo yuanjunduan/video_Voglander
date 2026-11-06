@@ -2,11 +2,20 @@
 import type { CascadeChannelApi } from '#/api/cascade/channel';
 import type { DeviceApi } from '#/api/device';
 
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 
 import { useVbenDrawer } from '@vben/common-ui';
 
-import { Button, message, Modal, Radio, Select, Switch, TreeSelect } from 'ant-design-vue';
+import {
+  Button,
+  Checkbox,
+  Empty,
+  message,
+  Modal,
+  Select,
+  Spin,
+  Switch,
+} from 'ant-design-vue';
 
 import { batchPublishCascadeChannels } from '#/api/cascade/channel';
 import { getCascadePlatformPage } from '#/api/cascade/platform';
@@ -14,20 +23,24 @@ import { getDeviceChannelPage } from '#/api/device';
 import { useDrawerResize } from '#/composables/useDrawerResize';
 import { $t } from '#/locales';
 
-import {
-  buildCascadeOrgTreeNodes,
-  ensureCascadeOrgTree,
-} from '../../shared/use-cascade-org';
+import OrgScopePanel from '../../../device/modules/org-scope-panel.vue';
 
 /**
- * 批量推送：一次推给多个上级平台，目标通道可以是「列表里勾选的那几路」或「某个组织下的全部」。
+ * 批量推送：一次推给多个上级平台，目标通道**按组织树**挑。
  *
- * <p>为什么要有「按组织」这一档：通道的组织归属跟随设备，一个组织下往往几十上百路，
- * 在勾选框里逐个翻等于没解决。按组织推的本质仍是给每路通道各建一条发布行——
- * 组织发布不会把通道带上去（上级目录里的通道节点只认通道自己的发布行）。
+ * <p>为什么不再给一个「1000 条扁平下拉」：通道量级上千时在下拉里翻找等于没法用，而且
+ * 用户心里想的从来是「把 A 栋的推上去」，不是「把 CH3402…、CH3403… 推上去」。
+ * 左侧组织树与设备页/通道页共用同一个面板，选组织就是选范围。
  *
- * <p>与行内「推送配置」的分工：这里只决定「推给谁、推哪些」，编码与名称一律沿用本地值；
- * 要逐平台改编码/名称/开关请用行内的推送配置。
+ * <p>两档目标来源，都建立在组织树上：
+ * - 默认：右栏只列<b>当前组织</b>下的通道，逐条勾选（跨组织累加，切换树不丢已选）；
+ * - 「推送整个组织」：不看勾选，直接把该组织下（按左下角含下级/仅本级）的全部通道推上去，
+ *   解决「一个组织几百路、一路路点不现实」的情况。
+ *
+ * <p>按组织推的本质仍是给每路通道各建一条发布行——组织发布不会把通道带上去
+ * （上级目录里的通道节点只认通道自己的发布行）。
+ *
+ * <p>与行内「推送配置」的分工：这里只决定「推给谁、推哪些」，编码与名称一律沿用本地值。
  */
 
 interface Emits {
@@ -39,27 +52,37 @@ interface DrawerData {
   channels?: DeviceApi.DeviceChannelVO[];
 }
 
-/** 目标通道来源：列表勾选 / 按组织 */
-type ScopeMode = 'checked' | 'org';
+interface ChannelOption {
+  /** `deviceId|channelId`：通道编码全局不唯一，必须带上设备段 */
+  key: string;
+  label: string;
+  deviceId: string;
+  channelId: string;
+}
 
 const emit = defineEmits<Emits>();
 
 const platformOptions = ref<Array<{ label: string; value: string }>>([]);
 const platformIds = ref<string[]>([]);
-const scopeMode = ref<ScopeMode>('checked');
-const channelOptions = ref<Array<{ label: string; value: string }>>([]);
+/** 左树选中的组织：undefined=全部资产，0=未归组织 */
+const activeOrgId = ref<number | undefined>(undefined);
+const includeChildren = ref(true);
+const channelOptions = ref<ChannelOption[]>([]);
 const selected = ref<string[]>([]);
 const channelLoading = ref(false);
-const orgTreeData = ref<any[]>([]);
-const orgId = ref<number | undefined>(undefined);
-const includeChildren = ref(true);
+const wholeOrg = ref(false);
 const result = ref<CascadeChannelApi.BatchPublishResult | null>(null);
 const resultOpen = ref(false);
 
-/** 选项 value 用 `deviceId|channelId`：通道编码全局不唯一，必须带上设备段 */
-function channelKey(channel: DeviceApi.DeviceChannelVO) {
-  return `${channel.deviceId}|${channel.channelId}`;
-}
+/** 是否有具体组织可选（「全部资产」不是一个能推的目标，它只是筛选态） */
+const orgSelected = computed(() => activeOrgId.value !== undefined);
+const useWholeOrg = computed(() => wholeOrg.value && orgSelected.value);
+
+const visibleKeys = computed(() => channelOptions.value.map((item) => item.key));
+/** 已选里有多少条不在当前组织下：切树后不能悄悄丢掉它们的选中态 */
+const outsideCount = computed(
+  () => selected.value.filter((key) => !visibleKeys.value.includes(key)).length,
+);
 
 async function loadPlatforms() {
   try {
@@ -77,16 +100,28 @@ async function loadPlatforms() {
   }
 }
 
-/** 本地通道候选项：一次拉够（通道量级在千内，分页选择器体验更差） */
+/**
+ * 右栏通道列表：跟着左树走。
+ *
+ * 组织筛选放在请求里而不是前端过滤：通道量级可能上千，一次拉全再筛会把「未归组织」这类
+ * 边界情况漏掉（后端 orgId=0 走的是 `org_id IS NULL`）。
+ */
 async function loadChannels() {
   channelLoading.value = true;
   try {
-    const result = await getDeviceChannelPage({ page: 1, size: 1000 }, {});
+    const body: DeviceApi.DeviceChannelQueryReq = {};
+    if (activeOrgId.value !== undefined) {
+      body.orgId = activeOrgId.value;
+      body.includeChildren = includeChildren.value;
+    }
+    const result = await getDeviceChannelPage({ page: 1, size: 1000 }, body);
     channelOptions.value = (result.items ?? []).map((item) => ({
+      key: `${item.deviceId}|${item.channelId}`,
       label: `${item.deviceId} / ${item.channelId}${
         item.name ? ` · ${item.name}` : ''
       }`,
-      value: channelKey(item),
+      deviceId: item.deviceId ?? '',
+      channelId: item.channelId ?? '',
     }));
   } catch (error) {
     console.error('加载本地通道失败:', error);
@@ -95,21 +130,22 @@ async function loadChannels() {
   }
 }
 
-/**
- * 组织树：value 取组织主键（后端按主键算设备集合）。
- *
- * 本地链路立不起来的组织置灰——它们的通道推上去也只会被后端拒绝，
- * 与其让用户提交后看一屏失败，不如在选择时就拦住。
- */
-async function loadOrgTree() {
-  await ensureCascadeOrgTree();
-  orgTreeData.value = buildCascadeOrgTreeNodes(undefined, {
-    disableStopped: true,
-    valueAs: 'id',
-  });
+function selectVisible() {
+  const merged = new Set([...selected.value, ...visibleKeys.value]);
+  selected.value = [...merged];
 }
 
-const checkedCount = computed(() => selected.value.length);
+const selectedText = computed(() => {
+  const outside =
+    outsideCount.value > 0
+      ? ` ${$t('cascade.channel.batchBind.selectedOutside', [
+          String(outsideCount.value),
+        ])}`
+      : '';
+  return `${$t('cascade.channel.batchBind.selectedSummary', [
+    String(selected.value.length),
+  ])}${outside}`;
+});
 
 const summaryText = computed(() => {
   const data = result.value;
@@ -127,6 +163,11 @@ const summaryText = computed(() => {
 
 const failures = computed(() => result.value?.failures ?? []);
 
+/* 切组织或改范围就重拉：右栏是该组织下的通道，留着旧组织的行会让用户勾错 */
+watch([activeOrgId, includeChildren], () => {
+  void loadChannels();
+});
+
 const { syncWidth } = useDrawerResize('vl-cascade-channel-batch-bind');
 
 const [Drawer, drawerApi] = useVbenDrawer({
@@ -141,14 +182,14 @@ const [Drawer, drawerApi] = useVbenDrawer({
     const data = drawerApi.getData<DrawerData>();
     platformIds.value = [];
     result.value = null;
-    orgId.value = undefined;
+    activeOrgId.value = undefined;
     includeChildren.value = true;
-    selected.value = (data?.channels ?? []).map((item) => channelKey(item));
-    /* 什么都没勾就是奔着「按组织」来的，别让用户多点一下 */
-    scopeMode.value = selected.value.length > 0 ? 'checked' : 'org';
+    wholeOrg.value = false;
+    selected.value = (data?.channels ?? []).map(
+      (item) => `${item.deviceId}|${item.channelId}`,
+    );
     void loadPlatforms();
     void loadChannels();
-    void loadOrgTree();
   },
 });
 
@@ -157,12 +198,11 @@ async function onSubmit() {
     message.error($t('cascade.channel.batchBind.platformRequired'));
     return;
   }
-  if (scopeMode.value === 'org') {
-    if (orgId.value === undefined || orgId.value === null) {
-      message.error($t('cascade.channel.batchBind.orgRequired'));
-      return;
-    }
-  } else if (selected.value.length === 0) {
+  if (wholeOrg.value && !orgSelected.value) {
+    message.error($t('cascade.channel.batchBind.orgRequired'));
+    return;
+  }
+  if (!useWholeOrg.value && selected.value.length === 0) {
     message.error($t('cascade.channel.batchBind.channelsRequired'));
     return;
   }
@@ -170,8 +210,8 @@ async function onSubmit() {
   const payload: CascadeChannelApi.BatchPublishReq = {
     platformIds: platformIds.value,
   };
-  if (scopeMode.value === 'org') {
-    payload.orgId = orgId.value;
+  if (useWholeOrg.value) {
+    payload.orgId = activeOrgId.value;
     payload.includeChildren = includeChildren.value;
   } else {
     payload.channels = selected.value.map((key) => {
@@ -223,59 +263,82 @@ function failureLine(failure: CascadeChannelApi.BatchPublishFailure) {
         </div>
       </div>
 
-      <div>
-        <div class="mb-2 font-medium">
-          {{ $t('cascade.channel.batchBind.scope') }}
-        </div>
-        <Radio.Group v-model:value="scopeMode" button-style="solid">
-          <Radio.Button value="checked">
-            {{ $t('cascade.channel.batchBind.scopeChecked') }}
-          </Radio.Button>
-          <Radio.Button value="org">
-            {{ $t('cascade.channel.batchBind.scopeOrg') }}
-          </Radio.Button>
-        </Radio.Group>
-      </div>
-
-      <div v-if="scopeMode === 'checked'">
-        <div class="mb-2 font-medium">
-          {{ $t('cascade.channel.batchBind.channels') }}
-        </div>
-        <Select
-          v-model:value="selected"
-          class="w-full"
-          :loading="channelLoading"
-          mode="multiple"
-          :options="channelOptions"
-          :placeholder="$t('cascade.channel.batchBind.channelsPlaceholder')"
-          show-search
+      <div class="bind-browse">
+        <OrgScopePanel
+          v-model:include-children="includeChildren"
+          v-model:org-id="activeOrgId"
         />
-        <div class="text-muted-foreground mt-1 text-xs">
-          {{ $t('cascade.channel.batchBind.checkedTip', [String(checkedCount)]) }}
-        </div>
-      </div>
 
-      <div v-else>
-        <div class="mb-2 font-medium">
-          {{ $t('cascade.channel.batchBind.org') }}
-        </div>
-        <TreeSelect
-          v-model:value="orgId"
-          allow-clear
-          class="w-full"
-          :placeholder="$t('cascade.channel.batchBind.orgPlaceholder')"
-          show-search
-          :tree-data="orgTreeData"
-          tree-node-filter-prop="label"
-        />
-        <div class="mt-2 flex items-center gap-2">
-          <Switch v-model:checked="includeChildren" size="small" />
-          <span class="text-sm">
-            {{ $t('cascade.channel.batchBind.includeChildren') }}
-          </span>
-        </div>
-        <div class="text-muted-foreground mt-1 text-xs">
-          {{ $t('cascade.channel.batchBind.orgTip') }}
+        <div class="bind-main">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="font-medium">
+              {{ $t('cascade.channel.batchBind.channels') }}
+              <span class="text-muted-foreground text-xs">
+                ({{ channelOptions.length }})
+              </span>
+            </div>
+            <div class="flex items-center gap-2">
+              <Button
+                :disabled="channelLoading || visibleKeys.length === 0"
+                size="small"
+                @click="selectVisible"
+              >
+                {{ $t('cascade.channel.batchBind.selectAll') }}
+              </Button>
+              <Button
+                :disabled="selected.length === 0"
+                size="small"
+                @click="selected = []"
+              >
+                {{ $t('cascade.channel.batchBind.clearSelected') }}
+              </Button>
+            </div>
+          </div>
+
+          <div class="whole-org">
+            <div class="flex items-center gap-2">
+              <Switch v-model:checked="wholeOrg" size="small" />
+              <span class="text-sm font-medium">
+                {{ $t('cascade.channel.batchBind.wholeOrg') }}
+              </span>
+              <span
+                v-if="!orgSelected"
+                class="text-muted-foreground text-xs"
+              >
+                {{ $t('cascade.channel.batchBind.wholeOrgNeedOrg') }}
+              </span>
+            </div>
+            <div class="text-muted-foreground mt-1 text-xs">
+              {{ $t('cascade.channel.batchBind.wholeOrgTip') }}
+            </div>
+          </div>
+
+          <div class="channel-picker" :class="{ 'is-muted': useWholeOrg }">
+            <Spin :spinning="channelLoading" size="small">
+              <Empty
+                v-if="channelOptions.length === 0"
+                :description="$t('cascade.channel.batchBind.channelsEmpty')"
+              />
+              <Checkbox.Group
+                v-else
+                v-model:value="selected"
+                class="channel-list"
+                :disabled="useWholeOrg"
+              >
+                <Checkbox
+                  v-for="item in channelOptions"
+                  :key="item.key"
+                  :value="item.key"
+                >
+                  <span class="channel-label">{{ item.label }}</span>
+                </Checkbox>
+              </Checkbox.Group>
+            </Spin>
+          </div>
+
+          <div class="text-muted-foreground text-xs">
+            {{ selectedText }}
+          </div>
         </div>
       </div>
 
@@ -330,6 +393,59 @@ function failureLine(failure: CascadeChannelApi.BatchPublishFailure) {
 </template>
 
 <style scoped>
+/* 左树 + 右列表：与通道页、设备页同一套两栏比例，抽屉里给树固定高度 */
+.bind-browse {
+  display: flex;
+  gap: 12px;
+  min-height: 0;
+}
+
+.bind-browse :deep(.org-panel) {
+  height: 420px;
+}
+
+.bind-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.whole-org {
+  padding: 8px 10px;
+  background: hsl(var(--muted) / 40%);
+  border-radius: 8px;
+}
+
+.channel-picker {
+  flex: 1;
+  min-height: 160px;
+  max-height: 300px;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  transition: opacity 0.16s;
+}
+
+/* 整组织推送时勾选不生效：置灰但仍可读，避免用户以为勾选丢了 */
+.channel-picker.is-muted {
+  opacity: 0.5;
+}
+
+.channel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.channel-label {
+  font-family: var(--font-family-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
 .fail-list {
   max-height: 220px;
   padding-left: 18px;

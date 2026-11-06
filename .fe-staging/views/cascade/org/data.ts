@@ -278,13 +278,20 @@ export function useOrgColumns(options: {
   const { beforeChangeEnabled, isDeleteBlocked, onActionClick } = options;
   const { hasAccessByCodes } = useAccess();
   const canToggleStatus = hasAccessByCodes(['Cascade:Org:Status']);
+  /**
+   * 发布范围复用编辑权限码，与行内「推送配置」同一口径。
+   *
+   * 勾选列由两件事共用：批量停用（Cascade:Org:Status）与批量推送（Cascade:Org:Edit）。
+   * 只认前一个码的话，有编辑权的人看不到勾选框，批量推送按钮点了永远是「没勾选」。
+   */
+  const canPublish = hasAccessByCodes(['Cascade:Org:Edit']);
 
   return [
     {
-      // 批量停用用：逐行勾选后一次性提交，不必逐个点开关
+      // 批量停用 / 批量推送共用：逐行勾选后一次性提交，不必逐个点开
       type: 'checkbox',
       fixed: 'left',
-      visible: canToggleStatus,
+      visible: canToggleStatus || canPublish,
       width: 44,
     },
     {
