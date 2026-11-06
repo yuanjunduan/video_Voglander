@@ -224,6 +224,11 @@ Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
 - 中文文案改 `locales/langs/zh-CN/*.json` 必须同步 `en-US/*.json`，键名严格一致。
 - 表格列用 `slots: { default: 'xxx' }` + 模板插槽，不要往列里塞 render 函数。
 - 表单 schema 的 `componentProps` 里带联动要用 `dependencies.componentProps + triggerFields`。
+- **组织筛选统一用左树**：`views/device/modules/org-scope-panel.vue` 是全站唯一组织树面板
+  （虚拟节点 `all`=undefined / `unassigned`=0 / `org:<id>`，自带「含下级 / 仅本级」）。设备列表页
+  与级联通道页都是 `<OrgScopePanel v-model:org-id v-model:include-children>` + `watch([activeOrgId,
+  includeChildren])` 重查；**orgId 绝不放进 form schema**——树选 A、表单选 B 会变成两份真相。query 里
+  只在 `activeOrgId !== undefined` 时叠加 `body.orgId` + `body.includeChildren`（`0` = 未归组织）。
 
 ---
 
@@ -281,6 +286,7 @@ Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
 | 25 | 组织筛选「选了上级组织一台设备都没有」 | 设备总挂在**叶子**组织上，只做 `eq(org_id, ?)` 必然空。需传 `includeChildren=true`，后端沿 `tb_cascade_org.org_path` 前缀展开子树（`CascadeOrgManager#listSubtreeIds`，比的是组织**主键**不是编码）。注意「按业务键取唯一一条」的入口必须固定 `false`，否则子树展开会把同名设备当成目标行 |
 | 26 | 「把这个组织下的通道全推上去」后，上级只看到组织、一个通道都没有 | 通道节点只认自己那行 `tb_cascade_publish(object_type=CHANNEL, object_key=deviceId:channelId)`，**组织发布（`PublishObjectType.ORG`）不会带出通道**。所以「按组织推通道」本质是：`orgId` → `DeviceManager#listDeviceIdsByOrgScope` 得设备集合（见 #24/#25）→ `DeviceChannelManager#listByDeviceIds` → 逐条走 `CascadeChannelManager#add`（发号 `resolve`+`fillCodeIfBlank` + 组织可见性校验）。直接插发布行或只发布组织，上级点播/PTZ/录像都反查不到本地通道 |
 | 27 | 脚本里 `dispatchEvent(new MouseEvent('click'))` 点表格勾选框毫无反应 | vxe-table 行勾选走 `isTrusted` 判断，程序化事件被直接丢弃（不报错、不变化，最难查）。必须用 CDP `Input.dispatchMouseEvent` 真实点击，且 `mouseMoved` 要带 `button:'none'`、`pointerType:'mouse'`，否则事件同样不落地。复用 `logs/_verify/cdp-click2.ps1`（坐标一律取 `getBoundingClientRect()` 的中心，vxe 同一行在 main/固定列/隐藏副本里各有一份 DOM，只点可见那份） |
+| 28 | 在浏览器里手写 `fetch('/api/v1/...')` 取数，后端回 `{"code":500,"msg":"No static resource v1/..."}` | 前端叠了三层前缀：`requestClient` 的 baseURL 是 `/api`，`src/api/*` 里的函数又写全 `/api/v1/...`，vite proxy 再把**首个** `/api` 剥掉。∴ 真实请求是 `/api/api/v1/...`，后端最终收到 `/api/v1/...`。浏览器里临时取数（CDP 脚本）必须写成 `/api/api/v1/...`；拼错时后端只回 `No static resource`（不是 404），容易误判成接口不存在 |
 
 ---
 
@@ -302,6 +308,7 @@ Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
 - 用户在更早一轮挂起的人工动作：向海康发一次 `DEL` 以重建通道 `34020000001320000007`（未执行）。
 - 新增设备自动补通道（`3bb7471`）**未在运行实例上验证**：后端 PID 需重启后才生效，验证点见提交说明（新增 RTSP 设备 → 日志出 `[channel.discover] 同步完成` → 列表通道数由 0 变 N）。
 - 按组织浏览设备/通道（后端 `1254afc` + 前端设备页左树双页签）**未在运行实例上验证**：后端需重启、前端需重新构建才生效。验证点：左侧组织目录选父组织 → 两个页签结果都变；「含下级 / 仅本级」切换结果集正确收窄；点「全部资产」与「未归组织」各能看到对应设备；通道页签的「所属设备」列可点进该设备通道页。
+  → **级联通道页的组织左树已于 2026-11-06 在本地实例验证通过**：全部资产 4 条 / verify-root（含下级）2 条 / 仅本级 1 条 / 未归组织 1 条，回「全部资产」恢复 4 条；`?orgId=2` 深链接在 SPA 内跳转与整页刷新两条路径上都会选中 verify-child 并收到 1 条，且 URL 上的 `orgId` 随即被清掉。设备列表页共用同一组件，未复验。
 - 同理，通道组织过滤的修复对**存量通道**成立的前提是设备有 `org_id`；`tb_device_channel.org_id` 残留旧值不再参与任何过滤，但也没做数据清理（不影响功能）。
 - `CascadeMediaInviteListenerTest.reap_idleTimeout_stopsPush` 的偶发失败未定位（疑定时器抖动）。
 - 1.10.5 本端客户端拆分（`29fe552`）**未做真机注册验证**：改 IP 会重建引用平台的注册任务，需对着真实上级确认
