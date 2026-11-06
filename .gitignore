@@ -55,6 +55,9 @@ media/**/MediaServer
 
 **/logs
 
-### 本地临时工作区(前端 staging 中转 / 探针脚本, 不入库) ###
-/.fe-staging/
+### 本地临时工作区(探针脚本, 不入库) ###
+### .fe-staging 的 api/locales/views 是前端改动的字节镜像，已入库；
+### _backup 是覆盖前的历史备份、_patch 是一次性补丁脚本，仍然不入库 ###
+/.fe-staging/_backup/
+/.fe-staging/_patch/
 /.probe/

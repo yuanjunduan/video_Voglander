@@ -185,7 +185,8 @@ Copy-Item (Join-Path $dst "views\cascade\org\data.ts") (Join-Path $src "views\ca
 ```
 
 > staging 里可能有**上一轮遗留的旧副本**，动手前先 Copy-Item 覆盖成最新，别在半年前的版本上改。
-> `.fe-staging/` 目前**未加入 .gitignore**，提交后端时务必按路径显式 `git add`，不要 `git add -A`。
+> `.fe-staging/{api,locales,views}` 已纳入版本管理（`_backup/`、`_patch/` 仍忽略），它就是前端改动的
+> 入库镜像；回写前端后要**再同步一次 staging 并一起提交**，否则入库的是旧稿（见 6.3 第 1 条）。
 
 ### 6.2 验证命令
 
@@ -220,7 +221,12 @@ Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
 
 ### 6.3 约定
 
-- **前端仓库不由我 add/commit**（用户明确要求），只负责把文件改对。
+- **前端改动随 voglander-master 一起提交**（2026-11-06 用户改口径）：前端工程
+  `D:\2026_git\shipin\voglander-vben-frontend-main` 本身**没有 git 仓库**，故不入库；入库的是它在
+  `.fe-staging/` 下的字节镜像。每次改完前端：`stage-push` 回写 → 用
+  `logs/_verify/sync-staging-from-fe.ps1` 把 staging 全量对齐前端 → `compare-staging.ps1` 必须报
+  `diff=0 missing=0` → `git add .fe-staging` 与后端/文档改动一起提交。**staging 与前端不一致时以前端为准**
+  （前端才是运行版本，staging 里可能是被淘汰的中间稿）。
 - 中文文案改 `locales/langs/zh-CN/*.json` 必须同步 `en-US/*.json`，键名严格一致。
 - 表格列用 `slots: { default: 'xxx' }` + 模板插槽，不要往列里塞 render 函数。
 - 表单 schema 的 `componentProps` 里带联动要用 `dependencies.componentProps + triggerFields`。
@@ -294,7 +300,7 @@ Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
 
 1. **先给方案与分步计划再动手**，小改动也一样；计划给出后按序连续执行，中间逐步汇报，不反复确认。
 2. **每完成一个后端需求就 `git add` 指定路径 + `git commit`**，Conventional Commits（`fix(cascade): ...`），body 用中文说清「原来错在哪 / 现在怎么做 / 验证了什么」。**`git push` 必须用户明确要求**。
-3. **前端仓库不提交**，只改文件。
+3. **前端工程的 git 状态**：它自己不是仓库，改动经 `.fe-staging` 镜像随本项目提交（见 6.3 第 1 条）；不要擅自在前端目录 `git init`。
 4. 业务口径不确定时才问用户；能用代码事实判断的就自己定，并在汇报里写清依据。
 5. 同一个问题连续三次尝试失败，就换思路或回来对齐，不要硬堆补丁。
 

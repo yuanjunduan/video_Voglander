@@ -1,0 +1,530 @@
+{
+  "menu": "Cascade Management",
+  "title": "Cascade Management",
+  "common": {
+    "save": "Save"
+  },
+  "platform": {
+    "title": "Cascade Platform Management",
+    "name": "Cascade Platform",
+    "add": "Add Platform",
+    "create": "Add Platform",
+    "edit": "Edit Platform",
+    "delete": "Delete Platform",
+    "status": "Enable/Disable",
+    "detail": "Platform Detail",
+    "refreshScheduler": "Refresh Scheduler",
+    "field": {
+      "id": "ID",
+      "platformId": "Platform ID",
+      "platformIp": "Platform IP",
+      "platformPort": "Platform Port",
+      "platformDomain": "Platform Domain",
+      "platformName": "Platform Name",
+      "clientRefId": "Local Client",
+      "localClientId": "Local Client Code (read-only)",
+      "localIp": "Advertised IP (read-only)",
+      "transport": "Transport Protocol",
+      "charset": "Charset",
+      "username": "Auth Username",
+      "password": "Auth Password",
+      "registerExpires": "Register Expires (s)",
+      "keepaliveInterval": "Keepalive Interval (s)",
+      "enabled": "Status",
+      "registerStatus": "Register Status",
+      "createTime": "Create Time",
+      "updateTime": "Update Time",
+      "operation": "Action"
+    },
+    "transport": {
+      "udp": "UDP",
+      "tcp": "TCP"
+    },
+    "enabled": {
+      "enabled": "Enabled",
+      "disabled": "Disabled"
+    },
+    "registerStatus": {
+      "offline": "Offline",
+      "online": "Online",
+      "registering": "Registering",
+      "failed": "Failed"
+    },
+    "action": {
+      "enable": "Enable",
+      "disable": "Disable"
+    },
+    "msg": {
+      "enableConfirm": "Enable platform [{0}]? Registration scheduler will start automatically.",
+      "disableConfirm": "Disable platform [{0}]? Registration task will stop and logout request will be sent.",
+      "refreshConfirm": "Refresh registration scheduler? All enabled platforms will be reloaded.",
+      "enableSuccess": "Platform enabled",
+      "disableSuccess": "Platform disabled",
+      "registering": "Platform [{0}] registering, please wait...",
+      "registerSuccess": "Platform [{0}] registered successfully",
+      "registerFailed": "Platform [{0}] registration failed",
+      "refreshSuccess": "Scheduler refreshed",
+      "deleteConfirm": "Delete platform [{0}]? Ensure it's disabled and has no associated channel mappings.",
+      "platformIdRequired": "Platform ID is required",
+      "platformIdFormat": "Platform ID must be 20-digit GB28181 format",
+      "platformIpRequired": "Platform IP is required",
+      "platformPortRequired": "Platform port is required",
+      "clientMissing": "No local client available yet. Create one on the Local Client page first."
+    },
+    "placeholder": {
+      "platformId": "Enter 20-digit GB28181 platform ID",
+      "platformIp": "Enter platform IP address",
+      "platformPort": "Enter platform port (default 5060)",
+      "platformDomain": "Enter platform domain (optional)",
+      "platformName": "Enter platform name (optional, for local identification)",
+      "clientRefId": "Select a local client (code and advertised IP come from it)",
+      "username": "Enter auth username (optional)",
+      "password": "Enter auth password (optional)",
+      "registerExpires": "Enter register expires (seconds, default 3600)",
+      "keepaliveInterval": "Enter keepalive interval (seconds, default 60)"
+    }
+  },
+  "client": {
+    "title": "Local Client",
+    "name": "Local Client",
+    "add": "Add Local Client",
+    "edit": "Edit Local Client",
+    "action": {
+      "setDefault": "Set Default"
+    },
+    "field": {
+      "clientId": "Local Platform Code",
+      "clientName": "Name",
+      "clientIp": "Advertised IP",
+      "isDefault": "Default",
+      "enabled": "Status",
+      "remark": "Remark",
+      "platformRefCount": "Platforms",
+      "createTime": "Create Time",
+      "operation": "Action"
+    },
+    "enabled": {
+      "enabled": "Enabled",
+      "disabled": "Disabled"
+    },
+    "default": {
+      "yes": "Yes",
+      "no": "No"
+    },
+    "placeholder": {
+      "clientId": "Enter 20-digit local platform code",
+      "clientName": "Enter name (optional, for local identification)",
+      "clientIp": "Enter an IP the upstream can reach back (blank = fill with the bound address when enabling)",
+      "remark": "Enter remark (optional)"
+    },
+    "help": {
+      "page": "A local client is the identity this node registers with upstream: 20-digit platform code plus the Contact header IP. Cascade platforms reference it, so changing the IP once takes effect everywhere."
+    },
+    "msg": {
+      "clientIdFormat": "Local platform code must be 20 digits",
+      "setDefaultSuccess": "Default local client updated",
+      "deleteConfirm": "Delete local client [{0}]? Referenced platforms will block the deletion.",
+      "deleteSuccess": "Local client deleted"
+    },
+    "empty": {
+      "noClient": "No local client yet: create one before referencing this identity on a cascade platform"
+    }
+  },
+  "org": {
+
+    "title": "Cascade Organization Tree",
+    "platformView": {
+      "title": "Platform view: organizations in the upstream catalog",
+      "action": "Published Orgs",
+      "switchPlaceholder": "Switch to platform view",
+      "backToLocal": "Back to local view",
+      "readOnlyTip": "Read-only: this is the upstream catalog at this moment. Switch back to the local view to make changes.",
+      "platform": "Upstream platform",
+      "delivered": "{0} organization(s) in catalog",
+      "blocked": "{0} checked but not delivered",
+      "rerouted": "{0} with channels rerouted to the domain node",
+      "treeTitle": "Organizations in catalog (as upstream sees them)",
+      "treeEmpty": "No organization in this platform catalog yet",
+      "blockedTitle": "Checked for publishing, but invisible upstream",
+      "blockedEmpty": "No blocker: every checked organization is already in the catalog",
+      "blockedTip": "These organizations are checked for publishing but blocked by the node listed; fix the blocker and the next catalog snapshot will include them.",
+      "note": "Codes and names are shown with this platform overrides; differing from local values is expected.",
+      "field": {
+        "name": "Name upstream sees",
+        "platformCode": "Platform code",
+        "localCode": "Local code",
+        "parentPlatformCode": "Parent code upstream",
+        "sortOrder": "Sort",
+        "blockedBy": "Blocked by",
+        "reason": "Reason",
+        "rerouted": "Channel handling"
+      },
+      "reason": {
+        "localDisabled": "Disabled locally",
+        "ancestorLocalDisabled": "Ancestor disabled locally",
+        "ancestorNotPublished": "Ancestor not published here",
+        "unknown": "Unknown reason"
+      },
+      "reroutedYes": "Rerouted to domain node",
+      "reroutedNo": "Not reported with the organization",
+      "loadFailed": "Failed to load platform organizations"
+    },
+    "name": "Cascade Organization",
+    "add": "New Organization",
+    "addChild": "New Child Organization",
+    "create": "New Organization",
+    "status": "Enable/Disable",
+    "edit": "Edit Organization",
+    "delete": "Delete Organization",
+    "detail": "Organization Detail",
+    "field": {
+      "id": "ID",
+      "parentId": "Parent",
+      "orgCode": "Org Code",
+      "orgName": "Name",
+      "level": "Level",
+      "channelCount": "Channels",
+      "sortOrder": "Order",
+      "publishedPlatforms": "Published To",
+      "publishCode": "Publish Code",
+      "publishName": "Publish Name",
+      "platformIds": "Publish To",
+      "enabled": "Local State",
+      "effective": "Reachable",
+      "createTime": "Created At",
+      "updateTime": "Updated At",
+      "operation": "Actions"
+    },
+    "enabled": {
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "on": "On",
+      "off": "Off"
+    },
+    "effective": {
+      "visible": "Reachable",
+      "invisible": "Unreachable",
+      "blockedBy": "Disabled by: {0}",
+      "blocked": "An ancestor is disabled, so this node is invisible on every platform"
+    },
+    "placeholder": {
+      "orgName": "Enter organization name",
+      "sortOrder": "Smaller comes first",
+      "platformIds": "Optional, can be configured later in \"Published To\""
+    },
+    "help": {
+      "create": "The org code is generated by the backend and cannot be typed in; the parent decides its place in the tree.",
+      "parentId": "The parent cannot be changed directly; use \"Move to...\" instead. The code stays, but every platform rebuilds the subtree.",
+      "platformIds": "Only decides which platforms receive it right away; unchecking never deletes configuration.",
+      "enabled": "Disabling removes the whole subtree from every platform catalog, without deleting any data.",
+      "deleteRule": "Deletion requires: no child organizations and no bound channels. A reported organization is first revoked from the upstream catalog and deleted locally only after the upstream platform confirms."
+    },
+    "msg": {
+      "deleteConfirm": "Delete organization [{0}]? Its report is revoked from every upstream platform first and the record is deleted only after they confirm. This cannot be undone.",
+      "deleteSuccess": "Organization deleted",
+      "deleteBlockedChildren": "This organization still has children",
+      "deleteBlockedChannels": "This organization still has {0} channel(s); move them first",
+      "publishSuccess": "Organization re-enabled; the node and its subtree reappear on every platform",
+      "orgNameRequired": "Organization name is required",
+      "copySuccess": "Org code copied"
+    },
+    "revoke": {
+      "title": "Disable Organization",
+      "titleBatch": "Disable Organizations",
+      "batchAction": "Batch Disable",
+      "orgCount": "Organizations",
+      "channelCount": "Channels",
+      "deleteCount": "Delete messages",
+      "nodes": "Nodes removed from each platform catalog",
+      "empty": "Nothing would be removed",
+      "loading": "Calculating impact...",
+      "previewFailed": "Failed to preview impact. Do not disable before reviewing the numbers.",
+      "deliverRisk": "Messages cannot be delivered now; the disable will not take effect upstream",
+      "deliveries": "Per-platform delivery",
+      "deliverable": "Deliverable",
+      "undeliverable": "Undeliverable",
+      "online": "Platform online",
+      "offline": "Platform offline",
+      "subscribed": "Catalog subscribed",
+      "unsubscribed": "Not subscribed",
+      "policyHint": "Channel policy is configured per platform in \"Published To\"; shown here for reference.",
+      "batchTip": "{0} organization(s) selected. They run one by one; results are listed per organization.",
+      "dataKept": "Local data of organizations and channels is kept; you can re-enable anytime.",
+      "nothingToRevoke": "Select organizations to disable (already disabled ones can be skipped)",
+      "success": "Disabled",
+      "failed": "Disable failed",
+      "batchSuccess": "Disabled {0} organization(s)",
+      "partialFail": "{0} organization(s) failed (succeeded {1}): {2}"
+    },
+    "empty": {
+      "noPlatform": "No parent platform yet",
+      "noPlatformTip": "Which platform receives an organization is decided by publish settings. Create a platform first.",
+      "noOrg": "No organization yet",
+      "noOrgTip": "Channels only appear under a business group when attached to an organization. Build a tree by region/project.",
+      "goPlatform": "Create parent platform"
+    },
+    "action": {
+      "expandAll": "Expand All",
+      "collapseAll": "Collapse All",
+      "copyCode": "Copy code",
+      "publish": "Published To"
+    },
+    "move": {
+      "title": "Move Organization",
+      "action": "Move to...",
+      "target": "Target parent",
+      "placeholder": "Leave empty to move to root",
+      "current": "Current location",
+      "targetTitle": "New location",
+      "subtreeOrgs": "Organizations moving",
+      "subtreeChannels": "Affected channels",
+      "loading": "Calculating impact...",
+      "sameParent": "Target parent equals current parent",
+      "hint": "The current organization and all its descendants are disabled in the list; choosing one would detach the subtree.",
+      "warning": "Platforms do not migrate existing nodes: the old parents are deleted one by one, then the subtree is rebuilt under the new parent. Codes and channel bindings stay, but the subtree is re-created upstream and related group configuration may need to be redone.",
+      "dataKept": "Only the parent and org path change locally; no child organization or channel binding is deleted.",
+      "success": "Organization moved, reloading catalogs",
+      "failed": "Failed to move organization"
+    },
+    "publish": {
+      "title": "Published To · {0}",
+      "tip": "Checked means the organization is published to that platform. Unchecking keeps code/name overrides; re-check to publish again.",
+      "loading": "Loading publish settings...",
+      "publishing": "Publishing",
+      "unconfigured": "Not configured",
+      "configuredStopped": "Configured · not publishing",
+      "revokePolicy": "Channel policy",
+      "policyCascade": "Remove channels too",
+      "policyReroute": "Keep channels, re-attach",
+      "revokePolicyTip": "When the organization is invisible on this platform, its channels are either removed or re-attached to the domain node.",
+      "success": "Publish settings saved",
+      "failed": "Failed to save publish settings"
+    },
+    "code": {
+      "title": "Recompute Codes · {0}",
+      "action": "Recompute Codes",
+      "loading": "Previewing against the current code rule...",
+      "warning": "Saving deletes these nodes upstream under their old codes first, then re-publishes the whole subtree under the new codes. Group configuration already set on the platform may need to be redone.",
+      "changes": "{0} organization code(s) will change",
+      "channelKept": "Channel codes stay unchanged: once published they are the reference key for upstream recordings, subscriptions and playback.",
+      "disabledTitle": "Code rule is disabled",
+      "disabledTip": "The global switch gateway.cascade.code-rule.enabled or this organization's \"generate by rule\" is off; nothing will be written.",
+      "conflictTitle": "Code conflicts found, nothing was written",
+      "conflictTip": "The new code is already used by another object on the same platform. All conflicts are listed at once; fix them and preview again.",
+      "noChange": "Organization codes already follow the rule",
+      "previewFailed": "Preview failed. Avoid running without seeing the change list.",
+      "confirm": "Recompute",
+      "close": "Got it",
+      "applied": "{0} organization code(s) recomputed",
+      "failed": "Failed to recompute organization codes",
+      "rule": {
+        "section": "Code Segments",
+        "badge": "Rule",
+        "badgeTip": "This organization uses the 7-segment code rule for creation and recompute",
+        "enabled": "Generate code by rule",
+        "enabledHelp": "When on, the code is built from the segments below. Saving never changes an already published code; run \"Recompute Codes\" to apply the new segments. Has no effect while gateway.cascade.code-rule.enabled is off.",
+        "province": "Province (2)",
+        "city": "City (2)",
+        "county": "County (4)",
+        "industry": "Industry (2)",
+        "type": "Type (3)",
+        "typeBusiness": "215 Business group",
+        "typeVirtual": "216 Virtual org",
+        "network": "Network (1)",
+        "startSeq": "Start seq",
+        "startSeqHelp": "Lower bound of the number pool only; 0 or empty means no bound. Sequence is still max+1 across all codes with the same prefix.",
+        "segmentPlaceholder": "{0} digit(s)",
+        "invalidWidth": "Each segment must be {0} digit(s); leave empty to inherit from the parent"
+      }
+    },
+    "tip": {
+      "level": "Level is derived from the org path and supports arbitrary nesting",
+      "channelCount": "Direct channels only, excluding child organizations",
+      "rootNode": "Root node"
+    }
+  },
+  "channel": {
+    "title": "Cascade Channels",
+    "name": "Cascade Channel",
+    "field": {
+      "id": "ID",
+      "platformId": "Platform",
+      "localDeviceId": "Local Device ID",
+      "localChannelId": "Local Channel ID",
+      "localChannel": "Local Channel",
+      "channelName": "Channel Name",
+      "status": "Status",
+      "cascadeChannelId": "Publish Code",
+      "cascadeName": "Publish Name",
+        "orgId": "Organization",
+      "enabled": "Publishing",
+      "localEnabled": "Local State",
+      "publishedPlatforms": "Published To",
+      "createTime": "Created At",
+      "operation": "Actions"
+    },
+    "status": {
+      "online": "Online",
+      "offline": "Offline"
+    },
+    "localEnabled": {
+      "enabled": "Enabled",
+      "disabled": "Disabled"
+    },
+    "action": {
+      "push": "Push Settings",
+      "assign": "Organization",
+      "delete": "Delete Channel"
+    },
+    "push": {
+      "title": "Push Settings",
+      "localTip": "Code, name and publishing switch are per-platform values; only the local state affects every platform. The parent node follows local organization assignment.",
+      "loading": "Loading push settings...",
+      "noPlatform": "No parent platform yet",
+      "unconfigured": "Not configured",
+      "publishing": "Publishing",
+      "stopped": "Stopped",
+      "platformDisabled": "Platform disabled",
+      "enabledTip": "Turning it off sends a delete message upstream; the configuration is kept.",
+      "saved": "Push settings saved for platform {0}",
+      "saveFailed": "Failed to save push settings",
+      "removed": "Push settings removed for platform {0}",
+      "removeFailed": "Failed to remove push settings",
+      "remove": "Remove",
+      "removeConfirm": "The channel will no longer be published to this platform and code/name overrides are discarded. Continue?"
+    },
+    "assign": {
+      "title": "Organization",
+      "orgTip": "A channel follows its device: its place in the catalog is decided by the device's organization. Change the device, and every platform follows.",
+      "failed": "Failed to save organization"
+    },
+    "batchBind": {
+      "title": "Batch Push",
+      "platformTip": "Multi-select: each platform gets its own push config, independent of the others.",
+      "scope": "Scope",
+      "scopeChecked": "Checked channels",
+      "scopeOrg": "By organization",
+      "channels": "Local Channels",
+      "channelsPlaceholder": "Select local channels",
+      "checkedTip": "{0} channel(s) checked; switch to \"By organization\" to push a whole subtree.",
+      "org": "Organization",
+      "orgPlaceholder": "Select an organization",
+      "includeChildren": "Include sub-organizations",
+      "orgTip": "Pushes every channel of the devices under this organization (channel placement follows the device); turn off to push direct devices only.",
+      "help": "Publish code defaults to the local channel code. Use per-row \"Push Settings\" to override.",
+      "platformRequired": "Select at least one platform",
+      "channelsRequired": "Select at least one channel",
+      "orgRequired": "Select an organization",
+      "resultTitle": "Push Result",
+      "resultSummary": "{0} channel(s) × {1} platform(s): {2} created, {3} already reporting, {4} stopped",
+      "resultDisabledTip": "Stopped rows are not re-enabled by a batch push; use per-row \"Push Settings\" to restore.",
+      "resultFailures": "{0} failed",
+      "resultNothing": "Nothing was pushed: check that the organization has channels and that their org is published to the target platform.",
+      "resultOk": "Got it",
+      "success": "Batch push finished, {0} added"
+    },
+    "help": {
+      "page": "The list is the local channel ledger; each row's \"Push Settings\" maintains per-platform code, name, switch and parent override."
+    },
+    "msg": {
+      "cascadeChannelIdRequired": "Publish code is required",
+      "localDisableConfirm": "Disabling channel [{0}] removes it from all platform catalogs (data kept). Continue?",
+      "deleteConfirm": "Deleting channel [{0}] first revokes its report (drop the push settings on every platform and remove the catalog node); the local record is deleted only after the upstream platforms confirm. This cannot be undone. Continue?"
+    },
+    "placeholder": {
+      "platformId": "Select platform",
+      "localDeviceId": "Enter local device ID",
+      "localChannelId": "Enter local channel ID",
+      "channelName": "Enter channel name",
+      "status": "Select status",
+      "localEnabled": "Select local state",
+      "orgId": "Empty means follow the device"
+    },
+    "tip": {
+      "rootNode": "Root node",
+      "followDevice": "Follows device",
+      "notPublished": "Not published",
+      "currentOrg": "Organization"
+    },
+    "empty": {
+      "noChannel": "No local channels. Sync channels on the device page first."
+    }
+  },
+  "monitor": {
+    "title": "Cascade Runtime Status",
+    "name": "Runtime Status",
+    "help": "Everything here is in-memory transient state: which page the catalog is stuck on, whether any page is in flight, and which SN the upstream currently subscribes to.",
+    "autoRefresh": "Auto Refresh",
+    "tip": {
+      "generatedAt": "Collected at {0}",
+      "refreshInterval": "Refreshes every 5 seconds, paused while the page is hidden",
+      "waiting": "Waiting {0}"
+    },
+    "progress": "{0} / {1} pages",
+    "sessionType": {
+      "live": "Live",
+      "playback": "Playback",
+      "download": "Download"
+    },
+    "section": {
+      "catalogBatches": "Catalog Batches",
+      "inflightPages": "In-flight Pages",
+      "pendingSessions": "Sessions Awaiting Stream",
+      "activeSessions": "Streaming Sessions",
+      "pendingNotifies": "Pending Notifies",
+      "activeSubscriptions": "Active Subscriptions"
+    },
+    "field": {
+      "platformId": "Platform",
+      "sn": "SN",
+      "sumNum": "Total Nodes",
+      "sentPages": "Sent Pages",
+      "totalPages": "Total Pages",
+      "startAt": "Started At",
+      "waitingMs": "Waiting",
+      "callId": "Call-ID",
+      "batchKey": "Batch",
+      "phase": "Phase",
+      "ssrc": "SSRC",
+      "localDeviceId": "Local Device ID",
+      "upperUserId": "Upstream Channel ID",
+      "sessionType": "Session Type",
+      "playback": "Playback",
+      "download": "Download",
+      "app": "App",
+      "stream": "Stream",
+      "dstUrl": "Receive URL",
+      "dstPort": "Receive Port",
+      "srcPort": "Send Port",
+      "udp": "UDP",
+      "createdAt": "Created At",
+      "lastActiveAt": "Last Active",
+      "desc": "Payload",
+      "sentAt": "Sent At",
+      "retried": "Retried",
+      "subType": "Subscription Type",
+      "expires": "Expires (s)",
+      "expireTime": "Expire Time",
+      "status": "Status"
+    },
+    "empty": {
+      "catalogBatches": "No catalog batch in progress",
+      "inflightPages": "No page in flight",
+      "sessions": "No session",
+      "pendingNotifies": "No pending notify"
+    }
+  },
+  "subscribe": {
+    "title": "Subscription Detail",
+    "empty": "No active subscription for this platform",
+    "action": {
+      "view": "Subscriptions"
+    },
+    "field": {
+      "subType": "Subscribe Type",
+      "expires": "Expires (s)",
+      "expireTime": "Expire Time",
+      "status": "Status"
+    }
+  }
+}

@@ -1,0 +1,530 @@
+{
+  "menu": "级联管理",
+  "title": "级联管理",
+  "common": {
+    "save": "保存"
+  },
+  "platform": {
+    "title": "上级平台管理",
+    "name": "上级平台",
+    "add": "新增上级平台",
+    "create": "新增平台",
+    "edit": "编辑上级平台",
+    "delete": "删除平台",
+    "status": "启停平台",
+    "detail": "平台详情",
+    "refreshScheduler": "刷新调度",
+    "field": {
+      "id": "ID",
+      "platformId": "平台ID",
+      "platformIp": "平台IP",
+      "platformPort": "平台端口",
+      "platformDomain": "平台域",
+      "platformName": "平台名称",
+      "clientRefId": "本端客户端",
+      "localClientId": "本端客户端编码（只读）",
+      "localIp": "对外通告IP（只读）",
+      "transport": "传输协议",
+      "charset": "编码",
+      "username": "认证用户名",
+      "password": "认证密码",
+      "registerExpires": "注册有效期(秒)",
+      "keepaliveInterval": "心跳间隔(秒)",
+      "enabled": "启用状态",
+      "registerStatus": "注册状态",
+      "createTime": "创建时间",
+      "updateTime": "更新时间",
+      "operation": "操作"
+    },
+    "transport": {
+      "udp": "UDP",
+      "tcp": "TCP"
+    },
+    "enabled": {
+      "enabled": "已启用",
+      "disabled": "已停用"
+    },
+    "registerStatus": {
+      "offline": "离线",
+      "online": "在线",
+      "registering": "注册中",
+      "failed": "注册失败"
+    },
+    "action": {
+      "enable": "启用",
+      "disable": "停用"
+    },
+    "msg": {
+      "enableConfirm": "确定启用平台【{0}】吗？启用后将自动启动注册调度。",
+      "disableConfirm": "确定停用平台【{0}】吗？停用后将立即停止注册任务并发送注销请求。",
+      "refreshConfirm": "确定刷新注册调度吗？将批量重载所有已启用平台的注册任务。",
+      "enableSuccess": "平台已启用",
+      "disableSuccess": "平台已停用",
+      "registering": "平台【{0}】注册中，请稍候...",
+      "registerSuccess": "平台【{0}】注册成功",
+      "registerFailed": "平台【{0}】注册失败",
+      "refreshSuccess": "注册调度已刷新",
+      "deleteConfirm": "确定删除平台【{0}】吗？删除前请确保已停用且无关联通道映射。",
+      "platformIdRequired": "平台ID为必填项",
+      "platformIdFormat": "平台ID必须符合国标20位格式",
+      "platformIpRequired": "平台IP为必填项",
+      "platformPortRequired": "平台端口为必填项",
+      "clientMissing": "还没有可用的本端客户端，请先到「本端客户端」页新增一条"
+    },
+    "placeholder": {
+      "platformId": "请输入20位国标平台ID",
+      "platformIp": "请输入上级平台IP地址",
+      "platformPort": "请输入平台端口（默认5060）",
+      "platformDomain": "请输入平台域（可选）",
+      "platformName": "请输入平台名称（可选，本端辨识用）",
+      "clientRefId": "请选择本端客户端（编码与对外通告IP由它提供）",
+      "username": "请输入认证用户名（可选）",
+      "password": "请输入认证密码（可选）",
+      "registerExpires": "请输入注册有效期（秒，默认3600）",
+      "keepaliveInterval": "请输入心跳间隔（秒，默认60）"
+    }
+  },
+  "client": {
+    "title": "本端客户端",
+    "name": "本端客户端",
+    "add": "新增本端客户端",
+    "edit": "编辑本端客户端",
+    "action": {
+      "setDefault": "设为默认"
+    },
+    "field": {
+      "clientId": "本端平台编码",
+      "clientName": "名称",
+      "clientIp": "对外通告IP",
+      "isDefault": "默认",
+      "enabled": "启用状态",
+      "remark": "备注",
+      "platformRefCount": "引用平台",
+      "createTime": "创建时间",
+      "operation": "操作"
+    },
+    "enabled": {
+      "enabled": "启用",
+      "disabled": "停用"
+    },
+    "default": {
+      "yes": "是",
+      "no": "否"
+    },
+    "placeholder": {
+      "clientId": "请输入20位本端平台编码",
+      "clientName": "请输入名称（可选，用于本地辨识）",
+      "clientIp": "请输入上级能回包的IP（留空则启用平台时用当前绑定地址回填）",
+      "remark": "请输入备注（可选）"
+    },
+    "help": {
+      "page": "本端客户端是本端向上级注册的身份：20位平台编码 + Contact 头对外通告IP。上级平台只引用一条记录，改一次IP对所有引用它的平台同时生效。"
+    },
+    "msg": {
+      "clientIdFormat": "本端平台编码必须为20位数字",
+      "setDefaultSuccess": "已设为默认本端客户端",
+      "deleteConfirm": "确定删除本端客户端【{0}】吗？仍被上级平台引用时会被拒绝。",
+      "deleteSuccess": "本端客户端已删除"
+    },
+    "empty": {
+      "noClient": "还没有本端客户端：新增一条后，才能在上级平台上引用本端身份"
+    }
+  },
+  "org": {
+
+    "title": "级联组织树",
+    "platformView": {
+      "title": "平台视角：上级目录里的组织",
+      "action": "已推送组织",
+      "switchPlaceholder": "切到平台视角",
+      "backToLocal": "返回本地视角",
+      "readOnlyTip": "只读视图：这里显示该上级平台这一刻的目录，要改请切回本地视角",
+      "platform": "上级平台",
+      "delivered": "目录内 {0} 个组织",
+      "blocked": "已勾选未上岸 {0} 个",
+      "rerouted": "通道改挂域节点 {0} 个",
+      "treeTitle": "目录内组织（上级看到的样子）",
+      "treeEmpty": "该平台目录里还没有组织",
+      "blockedTitle": "已勾选推送，但上级看不到",
+      "blockedEmpty": "没有阻断：勾选的组织都已在上级目录里",
+      "blockedTip": "这些组织在你这边已勾选推送，但被阻断节点挡下；先处理阻断节点，下一轮目录快照才会带上它们。",
+      "note": "编码与名称按该平台的发布覆盖显示，与本地值不同不代表出错。",
+      "field": {
+        "name": "上级看到的名称",
+        "platformCode": "平台编码",
+        "localCode": "本地编码",
+        "parentPlatformCode": "上级父节点编码",
+        "sortOrder": "排序",
+        "blockedBy": "阻断节点",
+        "reason": "阻断原因",
+        "rerouted": "通道处置"
+      },
+      "reason": {
+        "localDisabled": "自己本地停用",
+        "ancestorLocalDisabled": "祖先本地停用",
+        "ancestorNotPublished": "祖先未发布到该平台",
+        "unknown": "未知原因"
+      },
+      "reroutedYes": "已改挂域节点",
+      "reroutedNo": "随组织一起不上报",
+      "loadFailed": "查询平台组织失败"
+    },
+    "name": "级联组织",
+    "add": "新增级联组织",
+    "addChild": "新增下级组织",
+    "create": "新增组织",
+    "status": "启停",
+    "edit": "编辑级联组织",
+    "delete": "删除组织",
+    "detail": "组织详情",
+    "field": {
+      "id": "ID",
+      "parentId": "父组织",
+      "orgCode": "组织编码",
+      "orgName": "组织名称",
+      "level": "层级",
+      "channelCount": "直属通道",
+      "sortOrder": "排序",
+      "publishedPlatforms": "已推送平台",
+      "publishCode": "上报编码",
+      "publishName": "上报名称",
+      "platformIds": "推送到",
+      "enabled": "本地启停",
+      "effective": "本地可达",
+      "createTime": "创建时间",
+      "updateTime": "更新时间",
+      "operation": "操作"
+    },
+    "enabled": {
+      "enabled": "启用中",
+      "disabled": "已停用",
+      "on": "启用",
+      "off": "停用"
+    },
+    "effective": {
+      "visible": "可达",
+      "invisible": "不可达",
+      "blockedBy": "停用来源：{0}",
+      "blocked": "祖先组织已停用，各平台目录里都看不到该节点"
+    },
+    "placeholder": {
+      "orgName": "请输入组织名称",
+      "sortOrder": "数字越小越靠前",
+      "platformIds": "可留空，之后在「已推送平台」里配置"
+    },
+    "help": {
+      "create": "组织编码由后端按国标规则生成，创建后不可直接填写；父节点决定树上的位置。",
+      "parentId": "父组织创建后不可直接修改；需要调整层级请用「移动到…」，编码不变但各平台会重建该子树。",
+      "platformIds": "只决定建好后立即推给哪些上级；未勾选的平台不会删除任何配置，随时可以再补。",
+      "enabled": "停用会连带整棵子树一起从所有平台目录中剪掉，但不会删除任何数据。",
+      "deleteRule": "删除前置条件：该组织下没有子组织，且没有绑定任何通道；已上报的组织会先向上级取消上报，上级确认后才删本地记录。"
+    },
+    "msg": {
+      "deleteConfirm": "确定删除组织【{0}】吗？会先向上级取消上报，上级确认后才删除，不可恢复。",
+      "deleteSuccess": "组织已删除",
+      "deleteBlockedChildren": "该组织下还有子组织，请先删除子组织",
+      "deleteBlockedChannels": "该组织下还有 {0} 个通道，请先把通道迁到其他组织",
+      "publishSuccess": "组织已恢复上报，各平台目录会重新出现该节点及整棵子树",
+      "orgNameRequired": "组织名称为必填项",
+      "copySuccess": "组织编码已复制"
+    },
+    "revoke": {
+      "title": "停用组织",
+      "titleBatch": "批量停用组织",
+      "batchAction": "批量停用",
+      "orgCount": "组织",
+      "channelCount": "受影响通道",
+      "deleteCount": "删除报文",
+      "nodes": "各平台目录中将移除的节点",
+      "empty": "该组织下没有会被移除的节点",
+      "loading": "正在计算影响面…",
+      "previewFailed": "影响面预览失败，请重试。未看到数量前不建议直接停用。",
+      "deliverRisk": "当前报文发不出去，停用不会在上级生效",
+      "deliveries": "逐平台投递条件",
+      "deliverable": "可送达",
+      "undeliverable": "发不出去",
+      "online": "上级在线",
+      "offline": "上级离线",
+      "subscribed": "已订阅目录",
+      "unsubscribed": "未订阅目录",
+      "policyHint": "通道处置策略在「已推送平台」里逐平台配置，这里只展示。",
+      "batchTip": "已选 {0} 个组织，将逐个执行，单条失败不影响其余，结束后按组织列出结果。",
+      "dataKept": "组织与通道的本地数据都不会被删除，随时可以恢复。",
+      "nothingToRevoke": "请先勾选需要停用的组织（已停用的组织无需重复操作）",
+      "success": "已停用",
+      "failed": "停用失败",
+      "batchSuccess": "已停用 {0} 个组织",
+      "partialFail": "{0} 个组织停用失败（成功 {1} 个）：{2}"
+    },
+    "empty": {
+      "noPlatform": "还没有上级平台",
+      "noPlatformTip": "组织推给谁由发布配置决定，请先创建上级平台再配置推送。",
+      "noOrg": "还没有组织",
+      "noOrgTip": "通道只有挂在组织下才能进入上级平台的业务分组目录，建议按区域/项目建树。",
+      "goPlatform": "去创建上级平台"
+    },
+    "action": {
+      "expandAll": "展开全部",
+      "collapseAll": "收起全部",
+      "copyCode": "复制编码",
+      "publish": "已推送平台"
+    },
+    "move": {
+      "title": "移动组织",
+      "action": "移动到…",
+      "target": "目标父组织",
+      "placeholder": "不选表示移到根节点",
+      "current": "当前位置",
+      "targetTitle": "移动后位置",
+      "subtreeOrgs": "随同移动的组织",
+      "subtreeChannels": "受影响通道",
+      "loading": "正在计算影响面…",
+      "sameParent": "目标父组织与当前位置相同，无需移动",
+      "hint": "下拉里已置灰当前组织及其全部下级，移进去会让整棵子树脱树。",
+      "warning": "上级平台不会迁移已存在的节点：保存后会先按原父节点逐条删除、再按新父节点重建。组织编码与通道绑定都保持不变，但各平台的这棵子树是重新长出来的，原有的监控点分组/关联配置可能需要重新设置。",
+      "dataKept": "本地数据只改父节点与组织路径，子组织、通道绑定一条不删。",
+      "success": "组织已移动，正在重推目录",
+      "failed": "移动组织失败"
+    },
+    "publish": {
+      "title": "已推送平台 · {0}",
+      "tip": "勾选即代表该组织推送到这个上级；取消勾选不会删除编码与名称覆盖，随时可以再打开。",
+      "loading": "正在加载发布配置…",
+      "publishing": "推送中",
+      "unconfigured": "未配置",
+      "configuredStopped": "已配置·未推送",
+      "revokePolicy": "通道处置策略",
+      "policyCascade": "通道一起移除",
+      "policyReroute": "只移组织，通道改挂",
+      "revokePolicyTip": "该组织在这个平台上不可见时，其下通道是跟着删除，还是改挂到域节点继续上报。",
+      "success": "发布配置已保存",
+      "failed": "保存发布配置失败"
+    },
+    "code": {
+      "title": "重算组织编码 · {0}",
+      "action": "重算编码",
+      "loading": "正在按当前编码规则试算…",
+      "warning": "保存后会先按旧编码在各平台删掉这些节点，再按新编码重推整棵子树；上级侧已设的监控点分组/关联配置可能需要重新设置。",
+      "changes": "将变更 {0} 个组织编码",
+      "channelKept": "通道编码不跟着变：它一旦上报过，就是上级侧历史录像、订阅与点播的引用键。",
+      "disabledTitle": "编码规则未启用",
+      "disabledTip": "总闸 gateway.cascade.code-rule.enabled 或该组织的「按规则生成编码」未打开，此时不会写入任何数据。",
+      "conflictTitle": "存在编码冲突，已整批拒绝",
+      "conflictTip": "新编码在同一上级平台上已被其他对象占用。冲突一次列全，修正后重新试算即可。",
+      "noChange": "当前组织编码已符合规则，无需重算",
+      "previewFailed": "试算失败，请重试。未看到变更明细前不建议执行。",
+      "confirm": "开始重算",
+      "close": "知道了",
+      "applied": "已重算 {0} 个组织编码",
+      "failed": "重算组织编码失败",
+      "rule": {
+        "section": "编码段规则",
+        "badge": "规则",
+        "badgeTip": "该组织已启用七段编码规则：创建与重算都按下面的段位拼码",
+        "enabled": "按规则生成编码",
+        "enabledHelp": "打开后按下面的段位生成编码；保存不会改动已上报的编码，要让新段位生效需再对该组织执行「重算编码」。总闸 gateway.cascade.code-rule.enabled 关闭时此项不生效。",
+        "province": "省（2 位）",
+        "city": "市（2 位）",
+        "county": "县区（4 位）",
+        "industry": "行业（2 位）",
+        "type": "类型（3 位）",
+        "typeBusiness": "215 业务分组",
+        "typeVirtual": "216 虚拟组织",
+        "network": "网络标识（1 位）",
+        "startSeq": "起始序号",
+        "startSeqHelp": "只作号池下界，0 或留空表示不设下界：序号仍按同前缀全库最大值 +1。",
+        "segmentPlaceholder": "{0} 位数字",
+        "invalidWidth": "编码段需为 {0} 位数字（留空表示沿用父组织）"
+      }
+    },
+    "tip": {
+      "level": "层级由组织路径自动计算，支持任意深度嵌套",
+      "channelCount": "只统计直属该组织的通道，不含子组织",
+      "rootNode": "根节点"
+    }
+  },
+  "channel": {
+    "title": "级联通道管理",
+    "name": "级联通道",
+    "field": {
+      "id": "ID",
+      "platformId": "上级平台",
+      "localDeviceId": "本地设备ID",
+      "localChannelId": "本地通道ID",
+      "localChannel": "本地通道",
+      "channelName": "通道名称",
+      "status": "在线状态",
+      "cascadeChannelId": "上报编码",
+      "cascadeName": "上报名称",
+        "orgId": "归属组织",
+      "enabled": "上报开关",
+      "localEnabled": "本地启停",
+      "publishedPlatforms": "已推送平台",
+      "createTime": "创建时间",
+      "operation": "操作"
+    },
+    "status": {
+      "online": "在线",
+      "offline": "离线"
+    },
+    "localEnabled": {
+      "enabled": "启用",
+      "disabled": "停用"
+    },
+    "action": {
+      "push": "推送配置",
+      "assign": "归属组织",
+      "delete": "删除通道"
+    },
+    "push": {
+      "title": "推送配置",
+      "localTip": "编码、名称、上报开关都是每个平台各自的值，互不影响；本地启停才会同时影响所有平台。挂载位置不在这里配，跟着本地组织归属走。",
+      "loading": "正在加载推送配置…",
+      "noPlatform": "还没有上级平台，无法配置推送",
+      "unconfigured": "未配置",
+      "publishing": "上报中",
+      "stopped": "已停报",
+      "platformDisabled": "平台已停用",
+      "enabledTip": "关闭会向上级推一次删除报文，配置保留可随时恢复。",
+      "saved": "平台 {0} 的推送配置已保存",
+      "saveFailed": "保存推送配置失败",
+      "removed": "已移除平台 {0} 的推送配置",
+      "removeFailed": "移除推送配置失败",
+      "remove": "移除配置",
+      "removeConfirm": "移除后该平台不再上报这路通道，且编码与名称覆盖会一并丢弃，确定吗？"
+    },
+    "assign": {
+      "title": "归属组织",
+      "orgTip": "通道归属跟随设备：目录位置只由所属设备的组织决定。要换位置请修改设备归属，所有平台会一起生效。",
+      "failed": "保存归属组织失败"
+    },
+    "batchBind": {
+      "title": "批量推送",
+      "platformTip": "可多选：每个选中的平台各建一份推送配置，互不影响。",
+      "scope": "推送范围",
+      "scopeChecked": "勾选通道",
+      "scopeOrg": "按组织",
+      "channels": "本地通道",
+      "channelsPlaceholder": "选择要推送的本地通道（可多选）",
+      "checkedTip": "已勾选 {0} 路通道；要整批推送可以切到「按组织」。",
+      "org": "组织",
+      "orgPlaceholder": "选择组织",
+      "includeChildren": "含下级组织",
+      "orgTip": "推该组织下所有设备的通道（通道归属跟随设备）；关闭后只推直属设备的通道。",
+      "help": "上报编码默认沿用本地通道编码，需要逐平台改编码请用行内的「推送配置」。",
+      "platformRequired": "请至少选择一个上级平台",
+      "channelsRequired": "请至少选择一路通道",
+      "orgRequired": "请选择组织",
+      "resultTitle": "推送结果",
+      "resultSummary": "通道 {0} 路 × 平台 {1} 个：新建 {2}，已上报跳过 {3}，停报跳过 {4}",
+      "resultDisabledTip": "已停报的不会被批量推送自动恢复，要恢复请用行内的「推送配置」。",
+      "resultFailures": "失败 {0} 条",
+      "resultNothing": "没有任何通道被推上去：请确认该组织下有通道，且通道所属组织已发布到对应平台。",
+      "resultOk": "知道了",
+      "success": "批量推送完成，新增 {0} 条"
+    },
+    "help": {
+      "page": "列表是本地通道台账；每行「推送配置」里逐平台维护上报编码、名称、开关与父节点覆盖。"
+    },
+    "msg": {
+      "cascadeChannelIdRequired": "上报编码不能为空",
+      "localDisableConfirm": "停用通道【{0}】会让它从所有上级目录中消失（数据保留），确定吗？",
+      "deleteConfirm": "删除通道【{0}】会先向上级取消上报（删掉各级平台的推送配置并移除目录节点），上级确认后才删本地记录，不可恢复，确定吗？"
+    },
+    "placeholder": {
+      "platformId": "请选择上级平台",
+      "localDeviceId": "请输入本地设备ID",
+      "localChannelId": "请输入本地通道ID",
+      "channelName": "请输入通道名称",
+      "status": "请选择在线状态",
+      "localEnabled": "请选择本地启停",
+      "orgId": "不选表示跟随设备归属"
+    },
+    "tip": {
+      "rootNode": "根节点",
+      "followDevice": "跟随设备归属",
+      "notPublished": "未推送",
+      "currentOrg": "当前组织"
+    },
+    "empty": {
+      "noChannel": "没有本地通道，请先在设备页同步通道"
+    }
+  },
+  "monitor": {
+    "title": "级联运行状态",
+    "name": "运行状态",
+    "help": "本页是内存中的瞬时状态：目录分片停在第几包、有没有在途包、上级当前订阅的 SN 是多少，刷新即取最新值。",
+    "autoRefresh": "自动刷新",
+    "tip": {
+      "generatedAt": "采集时间 {0}",
+      "refreshInterval": "每 5 秒自动刷新，页面不可见时暂停",
+      "waiting": "已等待 {0}"
+    },
+    "progress": "{0} / {1} 页",
+    "sessionType": {
+      "live": "实时",
+      "playback": "回放",
+      "download": "下载"
+    },
+    "section": {
+      "catalogBatches": "目录分片批次",
+      "inflightPages": "在途分片",
+      "pendingSessions": "待推流会话",
+      "activeSessions": "推流中会话",
+      "pendingNotifies": "待确认推送",
+      "activeSubscriptions": "生效订阅"
+    },
+    "field": {
+      "platformId": "上级平台",
+      "sn": "SN",
+      "sumNum": "总节点数",
+      "sentPages": "已发页数",
+      "totalPages": "总页数",
+      "startAt": "开始时间",
+      "waitingMs": "等待时长",
+      "callId": "Call-ID",
+      "batchKey": "所属批次",
+      "phase": "阶段",
+      "ssrc": "SSRC",
+      "localDeviceId": "本地设备ID",
+      "upperUserId": "上级通道编码",
+      "sessionType": "会话类型",
+      "playback": "回放",
+      "download": "下载",
+      "app": "应用名",
+      "stream": "流ID",
+      "dstUrl": "收流地址",
+      "dstPort": "收流端口",
+      "srcPort": "发送端口",
+      "udp": "UDP",
+      "createdAt": "创建时间",
+      "lastActiveAt": "最近活动",
+      "desc": "推送内容",
+      "sentAt": "发送时间",
+      "retried": "已重发",
+      "subType": "订阅类型",
+      "expires": "有效期(秒)",
+      "expireTime": "过期时间",
+      "status": "状态"
+    },
+    "empty": {
+      "catalogBatches": "没有进行中的目录分片批次",
+      "inflightPages": "没有在途分片",
+      "sessions": "没有会话",
+      "pendingNotifies": "没有待确认推送"
+    }
+  },
+  "subscribe": {
+    "title": "订阅详情",
+    "empty": "该平台暂无活跃订阅",
+    "action": {
+      "view": "订阅详情"
+    },
+    "field": {
+      "subType": "订阅类型",
+      "expires": "有效期(秒)",
+      "expireTime": "过期时间",
+      "status": "状态"
+    }
+  }
+}
