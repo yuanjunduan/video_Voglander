@@ -23,6 +23,7 @@ import io.github.lunasaw.voglander.common.constant.ApiConstant;
 import io.github.lunasaw.voglander.common.domain.AjaxResult;
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeChannelMeta;
 import io.github.lunasaw.voglander.intergration.wrapper.gb28181.cascade.CascadeChannelMetaResolver;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelBatchPublishResultDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgView;
@@ -32,10 +33,12 @@ import io.github.lunasaw.voglander.manager.manager.CatalogVisibility;
 import io.github.lunasaw.voglander.manager.manager.DeviceChannelManager;
 import io.github.lunasaw.voglander.web.api.cascade.assembler.CascadeWebAssembler;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelBatchBindReq;
+import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelBatchPublishReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelCreateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelPageReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelUpdateReq;
 import io.github.lunasaw.voglander.web.api.cascade.resp.CascadeChannelListResp;
+import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeChannelBatchPublishResultVO;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeChannelVO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -80,6 +83,24 @@ public class CascadeChannelController {
     public AjaxResult<Integer> batchBind(@RequestBody CascadeChannelBatchBindReq req) {
         int added = cascadeChannelManager.batchBind(cascadeWebAssembler.toBatchDTOList(req));
         return AjaxResult.success(added);
+    }
+
+    /**
+     * 批量推送：一批本地通道 × 一批上级平台。
+     *
+     * <p>与 {@code /batchBind} 的分工：那个是「单平台 + 通道编码列表」，回答不了「一次推给多个上级」
+     * 和「把这个组织下的通道全推上去」。这里两种目标通道来源二选一（{@code channels} 或 {@code orgId}），
+     * 平台可以多选，返回逐类计数与失败明细——少掉的那些是「早推过」还是「真失败」，页面要能分开讲。
+     */
+    @PostMapping("/batchPublish")
+    @Operation(summary = "批量推送级联通道",
+        description = "多平台批量推送：channels 为勾选通道，orgId+includeChildren 为按组织取通道（二选一，orgId 优先）；"
+            + "已存在只跳过不自动改回上报，返回新建/跳过/失败明细")
+    public AjaxResult<CascadeChannelBatchPublishResultVO> batchPublish(
+        @RequestBody CascadeChannelBatchPublishReq req) {
+        CascadeChannelBatchPublishResultDTO result =
+            cascadeChannelManager.batchPublish(cascadeWebAssembler.toBatchPublishDTO(req));
+        return AjaxResult.success(cascadeWebAssembler.toBatchPublishVO(result));
     }
 
     @PutMapping("/{id}")

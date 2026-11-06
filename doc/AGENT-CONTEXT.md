@@ -134,6 +134,9 @@ mvn test -pl voglander-web -am "-Dtest=Cascade*Test" "-Dsurefire.failIfNoSpecifi
   - **事务边界**：10s SIP 等待不能困在 DB 事务里（SQLite 是整库写锁），撤销必须在事务外发起，本地删除用 `TransactionTemplate` 收口。
   - 设备删除编排在 `DeviceRemovalManager`（撤销 → 发布层 → 本地通道 → 设备本体，顺序不可换），`DeviceController` 两个删除接口都走它，**前端不要再自己拼「先删通道再删设备」**。主动路径已同步发过 `DEL`，不能再让 `afterCommit` 事件链路发第二遍；只有被动路径仍按平台在提交后合并成一个 `DEL` 事件（拆开发会被 4 线程的 `sipNotifierExecutor` 乱序执行，父节点先没了子节点的删除会被部分上级忽略）。
 - 快照是**增量 upsert**：节点「这次没出现」不会被上级删除，**必须显式推 `DEL`**。
+- **批量推送（`POST /cascade/channel/batchPublish`）不改停报状态**：已存在且 `enabled=1` 计入
+  `skippedEnabled`，已停报的计入 `skippedDisabled` 并**保持停报**——停报往往是上级要求下线，
+  批量动作静默改回等于越权。要恢复只能走单条 `/{id}/enable`（那里会校验组织可见性）。
 
 ### 4.6 本端身份只在 `tb_cascade_client`（1.10.5）
 
@@ -256,6 +259,7 @@ npx vitest run apps/web-antd/src/views/cascade
 | 23 | 新增 RTSP/ONVIF 设备后「没有通道」，日志里也没有 `channel.discover` | 这类设备的通道不在平台侧生成，只能由 `POST /deviceChannel/discover/{deviceId}` 读设备管理面台账；而该按钮在通道页，通道页入口是设备列表里 `channelCount>0` 的钻取链接 → 0 通道时进不去，形成死锁。现已两头修：`DeviceController#insert` 对 type=3/4 异步触发一次发现（失败只 warn），前端 0 也渲染成可点链接。诊断时先 `curl --digest -u <user>:<pwd> http://<ip>/ISAPI/ContentMgmt/InputProxy/channels` 确认设备侧台账是否可读 |
 | 24 | 通道页按组织筛「一条都没有」，而列表里明明有通道 | 过滤打的是 `tb_device_channel.org_id`，该列在「通道跟随设备」改造后**已停写、恒 NULL**（历史数据 8 条全为 NULL）；页面显示的组织名是 Controller 按所属设备推断的，两套口径互相矛盾。正确做法：先由 `DeviceManager#listDeviceIdsByOrgScope` 算出设备集合，再 `in(device_id)` |
 | 25 | 组织筛选「选了上级组织一台设备都没有」 | 设备总挂在**叶子**组织上，只做 `eq(org_id, ?)` 必然空。需传 `includeChildren=true`，后端沿 `tb_cascade_org.org_path` 前缀展开子树（`CascadeOrgManager#listSubtreeIds`，比的是组织**主键**不是编码）。注意「按业务键取唯一一条」的入口必须固定 `false`，否则子树展开会把同名设备当成目标行 |
+| 26 | 「把这个组织下的通道全推上去」后，上级只看到组织、一个通道都没有 | 通道节点只认自己那行 `tb_cascade_publish(object_type=CHANNEL, object_key=deviceId:channelId)`，**组织发布（`PublishObjectType.ORG`）不会带出通道**。所以「按组织推通道」本质是：`orgId` → `DeviceManager#listDeviceIdsByOrgScope` 得设备集合（见 #24/#25）→ `DeviceChannelManager#listByDeviceIds` → 逐条走 `CascadeChannelManager#add`（发号 `resolve`+`fillCodeIfBlank` + 组织可见性校验）。直接插发布行或只发布组织，上级点播/PTZ/录像都反查不到本地通道 |
 
 ---
 

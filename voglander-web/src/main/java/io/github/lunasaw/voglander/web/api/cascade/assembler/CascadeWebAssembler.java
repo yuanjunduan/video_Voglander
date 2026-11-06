@@ -5,6 +5,8 @@ import org.springframework.stereotype.Component;
 
 import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeBlockedOrgDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelBatchPublishDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelBatchPublishResultDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeClientDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
@@ -15,6 +17,7 @@ import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePublishDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeRevokePreviewDTO;
 import io.github.lunasaw.voglander.manager.manager.CatalogVisibility;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelBatchBindReq;
+import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelBatchPublishReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelCreateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelPageReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadeChannelUpdateReq;
@@ -26,6 +29,7 @@ import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformCodeRuleRe
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformCreateReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformPageReq;
 import io.github.lunasaw.voglander.web.api.cascade.req.CascadePlatformUpdateReq;
+import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeChannelBatchPublishResultVO;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadeOrgVO;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadePlatformOrgCatalogVO;
 import io.github.lunasaw.voglander.web.api.cascade.vo.CascadePublishVO;
@@ -548,5 +552,63 @@ public class CascadeWebAssembler {
             list.add(dto);
         }
         return list;
+    }
+
+    /**
+     * 批量推送请求 → DTO。
+     *
+     * <p>平台集合与通道来源都原样透传，不做任何「补齐/猜测」：给了 {@code orgId} 就用组织，
+     * 否则用勾选集——两种语义在 Manager 里是互斥分支，装配层插一手只会让两边理解不一致。
+     */
+    public CascadeChannelBatchPublishDTO toBatchPublishDTO(CascadeChannelBatchPublishReq req) {
+        if (req == null) {
+            return null;
+        }
+        CascadeChannelBatchPublishDTO dto = new CascadeChannelBatchPublishDTO();
+        dto.setPlatformIds(req.getPlatformIds());
+        dto.setOrgId(req.getOrgId());
+        dto.setIncludeChildren(req.getIncludeChildren());
+        List<CascadeChannelBatchPublishDTO.ChannelRef> refs = new ArrayList<>();
+        if (req.getChannels() != null) {
+            for (CascadeChannelBatchPublishReq.ChannelItem item : req.getChannels()) {
+                if (item == null) {
+                    continue;
+                }
+                CascadeChannelBatchPublishDTO.ChannelRef ref = new CascadeChannelBatchPublishDTO.ChannelRef();
+                ref.setLocalDeviceId(item.getLocalDeviceId());
+                ref.setLocalChannelId(item.getLocalChannelId());
+                refs.add(ref);
+            }
+        }
+        dto.setChannels(refs);
+        return dto;
+    }
+
+    /**
+     * 批量推送结果 DTO → VO。
+     */
+    public CascadeChannelBatchPublishResultVO toBatchPublishVO(CascadeChannelBatchPublishResultDTO dto) {
+        CascadeChannelBatchPublishResultVO vo = new CascadeChannelBatchPublishResultVO();
+        if (dto == null) {
+            return vo;
+        }
+        vo.setChannelCount(dto.getChannelCount());
+        vo.setPlatformCount(dto.getPlatformCount());
+        vo.setCreated(dto.getCreated());
+        vo.setSkippedEnabled(dto.getSkippedEnabled());
+        vo.setSkippedDisabled(dto.getSkippedDisabled());
+        List<CascadeChannelBatchPublishResultVO.FailureVO> failures = new ArrayList<>();
+        if (dto.getFailures() != null) {
+            for (CascadeChannelBatchPublishResultDTO.Failure failure : dto.getFailures()) {
+                CascadeChannelBatchPublishResultVO.FailureVO voFailure = new CascadeChannelBatchPublishResultVO.FailureVO();
+                voFailure.setLocalDeviceId(failure.getLocalDeviceId());
+                voFailure.setLocalChannelId(failure.getLocalChannelId());
+                voFailure.setPlatformId(failure.getPlatformId());
+                voFailure.setReason(failure.getReason());
+                failures.add(voFailure);
+            }
+        }
+        vo.setFailures(failures);
+        return vo;
     }
 }

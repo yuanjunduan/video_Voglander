@@ -2,8 +2,11 @@ package io.github.lunasaw.voglander.manager.manager;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.apache.commons.lang3.StringUtils;
@@ -19,6 +22,8 @@ import io.github.lunasaw.voglander.common.constant.cascade.CascadeConstant.Publi
 import io.github.lunasaw.voglander.common.event.LocalCascadeCatalogChangeEvent;
 import io.github.lunasaw.voglander.manager.code.CascadeCodeResolver;
 import io.github.lunasaw.voglander.manager.domaon.dto.DeviceDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelBatchPublishDTO;
+import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelBatchPublishResultDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeChannelDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadeOrgDTO;
 import io.github.lunasaw.voglander.manager.domaon.dto.cascade.CascadePlatformOrgView;
@@ -77,6 +82,15 @@ public class CascadeChannelManager {
      * @return 发布行主键
      */
     public Long add(CascadeChannelDTO dto) {
+        return add(dto, null);
+    }
+
+    /**
+     * 新增一条通道发布配置，复用调用方已算好的平台组织视图。
+     *
+     * @param platformView 该平台的组织视图；批量推送时传进来，避免每条都重算整棵组织树
+     */
+    private Long add(CascadeChannelDTO dto, CascadePlatformOrgView platformView) {
         Assert.notNull(dto, "dto 不能为空");
         Assert.hasText(dto.getPlatformId(), "platformId 不能为空");
         Assert.hasText(dto.getLocalChannelId(), "localChannelId 不能为空");
@@ -96,7 +110,7 @@ public class CascadeChannelManager {
         publish.setPublishName(dto.getCascadeName());
         /* 组织归属只看设备（通道行上的 org_id 已停写），发布行也不再保存按平台的父节点覆盖。
            落库前先确认设备组织在这个平台目录里立得起来，否则上级侧表现为「收到但挂不住」 */
-        assertLocalOrgVisible(dto.getPlatformId(), dto.getLocalChannelId());
+        assertLocalOrgVisible(dto.getPlatformId(), dto.getLocalChannelId(), platformView);
         publish.setEnabled(dto.getEnabled() == null ? 1 : dto.getEnabled());
         copyMeta(dto, publish);
         Long id = cascadePublishManager.publish(publish);
@@ -134,6 +148,76 @@ public class CascadeChannelManager {
             added++;
         }
         return added;
+    }
+
+    /**
+     * 批量推送：一批本地通道 × 一批上级平台，逐条补齐发布行。
+     *
+     * <p><b>为什么不用 {@link #batchBind}</b>：那个方法一个平台一次调用、且只能给通道编码列表，
+     * 既回答不了「一次推给多个上级」，也回答不了「这个组织下的通道全推上去」——后者需要先把
+     * 组织解析成设备集合再取通道。
+     *
+     * <p><b>为什么每条仍走 {@link #add} 而不是批量直插发布行</b>：通道能出现在上级目录的前提是
+     * 发布行带 {@code publish_code}。直插绕过 {@code add} 就不会发号、也不会校验组织可见性，
+     * 上级点播/PTZ/录像反查不到本地通道。这里只把「一次批量该算一次」的东西提到循环外。
+     *
+     * @param req 平台集合 + 通道来源（显式勾选或按组织）
+     * @return 逐类计数与失败明细
+     */
+    public CascadeChannelBatchPublishResultDTO batchPublish(CascadeChannelBatchPublishDTO req) {
+        Assert.notNull(req, "req 不能为空");
+        List<String> platformIds = distinctPlatformIds(req.getPlatformIds());
+        Assert.notEmpty(platformIds, "至少选择一个上级平台");
+        Assert.isTrue(req.getOrgId() != null
+            || (req.getChannels() != null && !req.getChannels().isEmpty()),
+            "请指定要推送的通道或组织");
+
+        List<CascadeChannelBatchPublishResultDTO.Failure> failures = new ArrayList<>();
+        List<CascadeChannelBatchPublishDTO.ChannelRef> channels = resolveChannelRefs(req, failures);
+
+        /* 每个平台只在开始时取一次发布集：逐条 get() 会让「N 通道 × M 平台」退化成 N×M 次查库 */
+        Map<String, Map<String, CascadePublishDTO>> existingByPlatform = new HashMap<>();
+        for (String platformId : platformIds) {
+            existingByPlatform.put(platformId,
+                cascadePublishManager.indexByObjectKey(platformId, PUBLISH_TYPE, false));
+        }
+        Map<String, CascadePlatformOrgView> viewByPlatform = new HashMap<>();
+        int created = 0;
+        int skippedEnabled = 0;
+        int skippedDisabled = 0;
+        for (CascadeChannelBatchPublishDTO.ChannelRef channel : channels) {
+            String objectKey = PublishKeys.channel(channel.getLocalDeviceId(), channel.getLocalChannelId());
+            for (String platformId : platformIds) {
+                CascadePublishDTO existed = existingByPlatform.get(platformId).get(objectKey);
+                if (existed != null) {
+                    /* 已存在只跳过，不自动改回上报：停报往往是上级要求下线，批量动作不该静默推翻它 */
+                    if (Integer.valueOf(1).equals(existed.getEnabled())) {
+                        skippedEnabled++;
+                    } else {
+                        skippedDisabled++;
+                    }
+                    continue;
+                }
+                try {
+                    add(publishDto(platformId, channel), platformView(viewByPlatform, platformId));
+                    created++;
+                } catch (RuntimeException e) {
+                    failures.add(failure(channel, platformId,
+                        StringUtils.defaultIfBlank(e.getMessage(), e.getClass().getSimpleName())));
+                }
+            }
+        }
+
+        CascadeChannelBatchPublishResultDTO result = new CascadeChannelBatchPublishResultDTO();
+        result.setChannelCount(channels.size());
+        result.setPlatformCount(platformIds.size());
+        result.setCreated(created);
+        result.setSkippedEnabled(skippedEnabled);
+        result.setSkippedDisabled(skippedDisabled);
+        result.setFailures(failures);
+        log.info("批量推送级联通道: platformIds={}, 通道={}, 新增={}, 已上报跳过={}, 停报跳过={}, 失败={}",
+            platformIds, channels.size(), created, skippedEnabled, skippedDisabled, failures.size());
+        return result;
     }
 
     /**
@@ -391,6 +475,115 @@ public class CascadeChannelManager {
         return local.getDeviceId();
     }
 
+    /**
+     * 目标通道：按组织解析优先，其次用显式勾选集。
+     *
+     * <p>通道行上的 {@code org_id} 已停写（恒 NULL），所以「按组织取通道」只能先算出该组织范围内的
+     * 设备集合再取通道——与设备页组织树同一口径，不能直接按通道表筛。
+     *
+     * <p>解析不出来的通道不静默丢弃：逐条记进 {@code failures}，否则用户只会看到「推了 50 条只成功 30 条」
+     * 而不知道另外 20 条去哪了。
+     */
+    private List<CascadeChannelBatchPublishDTO.ChannelRef> resolveChannelRefs(
+        CascadeChannelBatchPublishDTO req, List<CascadeChannelBatchPublishResultDTO.Failure> failures) {
+        List<CascadeChannelBatchPublishDTO.ChannelRef> refs = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        if (req.getOrgId() != null) {
+            List<String> deviceIds = deviceManager.listDeviceIdsByOrgScope(req.getOrgId(),
+                !Boolean.FALSE.equals(req.getIncludeChildren()));
+            for (DeviceChannelDO channel : deviceChannelManager.listByDeviceIds(deviceIds)) {
+                addRef(refs, seen, channel.getDeviceId(), channel.getChannelId());
+            }
+            return refs;
+        }
+        if (req.getChannels() == null) {
+            return refs;
+        }
+        for (CascadeChannelBatchPublishDTO.ChannelRef item : req.getChannels()) {
+            if (item == null || StringUtils.isBlank(item.getLocalChannelId())) {
+                continue;
+            }
+            String channelId = item.getLocalChannelId().trim();
+            /* 设备段能省则省，但落库前必须确认真有这条通道：凭空造一条发布行会在上级目录里
+               留下挂不住的孤儿节点，且本地删通道时也清不掉它 */
+            String deviceId = StringUtils.trimToNull(item.getLocalDeviceId());
+            DeviceChannelDO local = deviceId == null
+                ? deviceChannelManager.getByChannelId(channelId)
+                : deviceChannelManager.getByDeviceId(deviceId, channelId);
+            if (local == null) {
+                failures.add(failure(deviceId, channelId, null, "本地通道不存在"));
+                continue;
+            }
+            addRef(refs, seen, local.getDeviceId(), local.getChannelId());
+        }
+        return refs;
+    }
+
+    private void addRef(List<CascadeChannelBatchPublishDTO.ChannelRef> refs, Set<String> seen,
+        String deviceId, String channelId) {
+        if (StringUtils.isAnyBlank(deviceId, channelId)) {
+            return;
+        }
+        /* 勾选与组织两种来源可能重叠，同一业务键只处理一次，否则第二次会撞 add 的重复校验 */
+        if (!seen.add(PublishKeys.channel(deviceId, channelId))) {
+            return;
+        }
+        CascadeChannelBatchPublishDTO.ChannelRef ref = new CascadeChannelBatchPublishDTO.ChannelRef();
+        ref.setLocalDeviceId(deviceId);
+        ref.setLocalChannelId(channelId);
+        refs.add(ref);
+    }
+
+    /** 通道推送 DTO：只带平台与本地标识，编码/名称留空由编码规则派生。 */
+    private CascadeChannelDTO publishDto(String platformId, CascadeChannelBatchPublishDTO.ChannelRef channel) {
+        CascadeChannelDTO dto = new CascadeChannelDTO();
+        dto.setPlatformId(platformId);
+        dto.setLocalDeviceId(channel.getLocalDeviceId());
+        dto.setLocalChannelId(channel.getLocalChannelId());
+        return dto;
+    }
+
+    /** 平台组织视图：批量推送里每个平台只算一次（现算是「取组织发布集 + 遍历全量组织」）。 */
+    private CascadePlatformOrgView platformView(Map<String, CascadePlatformOrgView> cache, String platformId) {
+        CascadePlatformOrgView view = cache.get(platformId);
+        if (view == null) {
+            view = cascadeOrgManager.platformOrgView(platformId);
+            cache.put(platformId, view);
+        }
+        return view;
+    }
+
+    private CascadeChannelBatchPublishResultDTO.Failure failure(
+        CascadeChannelBatchPublishDTO.ChannelRef channel, String platformId, String reason) {
+        return failure(channel.getLocalDeviceId(), channel.getLocalChannelId(), platformId, reason);
+    }
+
+    private CascadeChannelBatchPublishResultDTO.Failure failure(String deviceId, String channelId,
+        String platformId, String reason) {
+        CascadeChannelBatchPublishResultDTO.Failure failure = new CascadeChannelBatchPublishResultDTO.Failure();
+        failure.setLocalDeviceId(deviceId);
+        failure.setLocalChannelId(channelId);
+        failure.setPlatformId(platformId);
+        failure.setReason(reason);
+        return failure;
+    }
+
+    /** 平台编码去空白、去重：同一平台重复出现会让每条通道被处理两次。 */
+    private List<String> distinctPlatformIds(List<String> platformIds) {
+        List<String> result = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        if (platformIds == null) {
+            return result;
+        }
+        for (String platformId : platformIds) {
+            String trimmed = StringUtils.trimToNull(platformId);
+            if (trimmed != null && seen.add(trimmed)) {
+                result.add(trimmed);
+            }
+        }
+        return result;
+    }
+
     /** 目录项元数据：null 不改、空串改回自动派生、非空为覆盖值。 */
     private void copyMeta(CascadeChannelDTO dto, CascadePublishDTO publish) {
         publish.setManufacturer(dto.getManufacturer());
@@ -428,7 +621,8 @@ public class CascadeChannelManager {
      *
      * <p>设备没有归属、或归属的组织已被删除时放行：这两种情况下上级侧是「挂到域节点」，不是脏数据。
      */
-    private void assertLocalOrgVisible(String platformId, String localChannelId) {
+    private void assertLocalOrgVisible(String platformId, String localChannelId,
+        CascadePlatformOrgView platformView) {
         DeviceChannelDO local = deviceChannelManager.getByChannelId(localChannelId);
         if (local == null) {
             return;
@@ -440,7 +634,7 @@ public class CascadeChannelManager {
         }
         CascadeOrgDTO org = cascadeOrgManager.getById(orgId);
         if (org != null) {
-            assertVisible(platformId, org);
+            assertVisible(platformId, org, platformView);
         }
     }
 
@@ -469,8 +663,22 @@ public class CascadeChannelManager {
      * {@code REROUTE}（通道上浮挂域节点，同样会出现在目录里）。
      */
     private void assertVisible(String platformId, CascadeOrgDTO org) {
+        assertVisible(platformId, org, null);
+    }
+
+    /**
+     * 校验组织确实会在该平台的目录里出现（可复用已算好的平台视图）。
+     *
+     * <p>判据不再是「组织 enabled=1」：本地启用只是必要条件，真正决定上级能不能看到的是
+     * {@code platformOrgView}——本地整条祖先链启用 ∩ 该平台已发布，或虽然立不起来但配置了
+     * {@code REROUTE}（通道上浮挂域节点，同样会出现在目录里）。
+     *
+     * @param platformView 该平台的组织视图；{@code null} 时现算
+     */
+    private void assertVisible(String platformId, CascadeOrgDTO org, CascadePlatformOrgView platformView) {
         String cascadeOrgId = org.getOrgCode();
-        CascadePlatformOrgView view = cascadeOrgManager.platformOrgView(platformId);
+        CascadePlatformOrgView view = platformView != null ? platformView
+            : cascadeOrgManager.platformOrgView(platformId);
         boolean inCatalog = view.catalogOrgs().stream()
             .anyMatch(each -> cascadeOrgId.equals(each.getLocalCode()));
         if (inCatalog || view.reroutedLocalCodes().contains(cascadeOrgId)) {
