@@ -198,6 +198,26 @@ cd D:\2026_git\shipin\voglander-vben-frontend-main
 npx vitest run apps/web-antd/src/views/cascade
 ```
 
+### 6.2.1 端到端（真浏览器）验证
+
+只改文件不算验证。要证明一条页面链路真的通，用 CDP 驱动一个真实 Chrome，脚本都在 `logs/_verify/`：
+
+```powershell
+# 1) 起 Chrome（Start-Process 起的会被 shell 会话回收，必须走 CIM）
+Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+  CommandLine = '"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=61196 --user-data-dir=<临时目录> http://127.0.0.1:5666' }
+
+# 2) 执行 JS（表达式走文件，命令行传参会吞双引号）
+& logs\_verify\cdp-run.ps1 -ScriptFile logs\_verify\step9-checked-submit.js -Port 61196
+
+# 3) 真实鼠标点击（vxe 勾选只能这么点，见坑位 #27）
+& logs\_verify\cdp-click2.ps1 -Points '239,519;239,559' -Port 61196
+```
+
+要点：登录页有滑块验证码，绕法是 `fetch('/api/auth/login')` 拿 token 写进 localStorage
+（store key `vben-web-antd-5.7.0-dev-core-access`），**还要再拉一次 `/api/auth/codes` 写 accessCodes**，
+否则按钮点了只会提示「您没有执行该操作的权限」。页面路由用后端菜单里的 `path`（如 `/device/cascade/channel`）。
+
 ### 6.3 约定
 
 - **前端仓库不由我 add/commit**（用户明确要求），只负责把文件改对。
@@ -260,6 +280,7 @@ npx vitest run apps/web-antd/src/views/cascade
 | 24 | 通道页按组织筛「一条都没有」，而列表里明明有通道 | 过滤打的是 `tb_device_channel.org_id`，该列在「通道跟随设备」改造后**已停写、恒 NULL**（历史数据 8 条全为 NULL）；页面显示的组织名是 Controller 按所属设备推断的，两套口径互相矛盾。正确做法：先由 `DeviceManager#listDeviceIdsByOrgScope` 算出设备集合，再 `in(device_id)` |
 | 25 | 组织筛选「选了上级组织一台设备都没有」 | 设备总挂在**叶子**组织上，只做 `eq(org_id, ?)` 必然空。需传 `includeChildren=true`，后端沿 `tb_cascade_org.org_path` 前缀展开子树（`CascadeOrgManager#listSubtreeIds`，比的是组织**主键**不是编码）。注意「按业务键取唯一一条」的入口必须固定 `false`，否则子树展开会把同名设备当成目标行 |
 | 26 | 「把这个组织下的通道全推上去」后，上级只看到组织、一个通道都没有 | 通道节点只认自己那行 `tb_cascade_publish(object_type=CHANNEL, object_key=deviceId:channelId)`，**组织发布（`PublishObjectType.ORG`）不会带出通道**。所以「按组织推通道」本质是：`orgId` → `DeviceManager#listDeviceIdsByOrgScope` 得设备集合（见 #24/#25）→ `DeviceChannelManager#listByDeviceIds` → 逐条走 `CascadeChannelManager#add`（发号 `resolve`+`fillCodeIfBlank` + 组织可见性校验）。直接插发布行或只发布组织，上级点播/PTZ/录像都反查不到本地通道 |
+| 27 | 脚本里 `dispatchEvent(new MouseEvent('click'))` 点表格勾选框毫无反应 | vxe-table 行勾选走 `isTrusted` 判断，程序化事件被直接丢弃（不报错、不变化，最难查）。必须用 CDP `Input.dispatchMouseEvent` 真实点击，且 `mouseMoved` 要带 `button:'none'`、`pointerType:'mouse'`，否则事件同样不落地。复用 `logs/_verify/cdp-click2.ps1`（坐标一律取 `getBoundingClientRect()` 的中心，vxe 同一行在 main/固定列/隐藏副本里各有一份 DOM，只点可见那份） |
 
 ---
 
